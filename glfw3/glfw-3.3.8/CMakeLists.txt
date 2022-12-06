@@ -105,6 +105,24 @@ if (MSVC AND NOT USE_MSVC_RUNTIME_LIBRARY_DLL)
     endif()
 endif()
 
+if(WIN32)
+    # JOESCAN: big hack; something is causing the wrong MSCV CRT to be selected
+    foreach (flag CMAKE_C_FLAGS
+                CMAKE_C_FLAGS_DEBUG
+                CMAKE_C_FLAGS_RELEASE
+                CMAKE_C_FLAGS_MINSIZEREL
+                CMAKE_C_FLAGS_RELWITHDEBINFO
+                CMAKE_CXX_FLAGS_DEBUG
+                CMAKE_CXX_FLAGS_RELEASE
+                CMAKE_CXX_FLAGS_MINSIZEREL
+                CMAKE_CXX_FLAGS_RELWITHDEBINFO)
+
+        if (${${flag}} MATCHES "/MD")
+            string(REPLACE "/MD" "/MT" ${flag} "${${flag}}")
+        endif()
+    endforeach()
+endif()
+
 if (MINGW)
     # Workaround for legacy MinGW not providing XInput and DirectInput
     include(CheckIncludeFile)
