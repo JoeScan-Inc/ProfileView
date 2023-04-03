@@ -13,7 +13,6 @@
 #include <iostream>
 #include <fstream>
 
-#include "json.hpp"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl2.h"
 #include <stdio.h>
@@ -33,6 +32,8 @@
 #endif
 
 #if 0
+#include "json.hpp"
+
 static void apply_alignment_json(jsScanHead &scan_head)
 {
   std::string file_name = std::to_string(serial_number) + ".json";
@@ -109,6 +110,7 @@ int main(int argc, char* argv[])
     jsProfile profile;
 
     app.SetSerialNumber(serial_number);
+    app.SetThreshold(80);
     app.SetLaserOn(500, 100, 2000);
     app.SetWindow(40.0, -40.0, -40.0, 40.0);
     app.Configure();
@@ -220,7 +222,7 @@ int main(int argc, char* argv[])
       if (!is_plot_sucess) {
         continue;
       }
-      
+
       ImPlot::SetupAxesLimits(-50.0, 50.0, -50.0, 50.0);
       ImPlot::SetupFinish();
 
@@ -236,7 +238,7 @@ int main(int argc, char* argv[])
           throw joescan::ApiError("jsScanHeadGetProfiles failed", r);
         }
 
-        uint32_t idx = (is_mode_camera) ? 
+        uint32_t idx = (is_mode_camera) ?
                        ((uint32_t) profile.camera) - 1 :
                        ((uint32_t) profile.laser) - 1;
 
