@@ -203,16 +203,16 @@ int main(int argc, char* argv[])
       char buf[64];
       for (uint32_t i = 0; i < element_count; i++) {
         if (is_mode_camera) {
-          sprintf(buf, "Camera %d", i + 1, laser_on_time_us[i]);
+          sprintf(buf, "Camera %d", i + 1);
         } else {
-          sprintf(buf, "Laser %d]", i + 1, laser_on_time_us[i]);
+          sprintf(buf, "Laser %d]", i + 1);
         }
 
         ImGui::Checkbox(buf, &is_element_enabled[i]);
         ImGui::SameLine();
       }
 
-      ImGui::Text("Encoder = %llu", (int64_t) profile.encoder_values[0]);
+      ImGui::Text("Encoder = %lu", (int64_t) profile.encoder_values[0]);
 
       auto is_plot_sucess = ImPlot::BeginPlot("Profile Plot",
                                               "X [inches]",
