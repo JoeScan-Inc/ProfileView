@@ -110,11 +110,11 @@ int main(int argc, char* argv[])
     jsProfile profile;
 
     app.SetSerialNumber(serial_number);
+    app.Connect();
     app.SetThreshold(80);
     app.SetLaserOn(500, 100, 2000);
     app.SetWindow(40.0, -40.0, -40.0, 40.0);
     app.Configure();
-    app.Connect();
     app.ConfigureDistinctElementPhaseTable();
     app.StartScanning();
 
@@ -212,7 +212,7 @@ int main(int argc, char* argv[])
         ImGui::SameLine();
       }
 
-      ImGui::Text("Encoder = %d", (int32_t) profile.encoder_values[0]);
+      ImGui::Text("Encoder = %llu", (int64_t) profile.encoder_values[0]);
 
       auto is_plot_sucess = ImPlot::BeginPlot("Profile Plot",
                                               "X [inches]",
@@ -226,9 +226,10 @@ int main(int argc, char* argv[])
       ImPlot::SetupAxesLimits(-50.0, 50.0, -50.0, 50.0);
       ImPlot::SetupFinish();
 
-      r = jsScanHeadGetProfilesAvailable(scan_head);
+      r = jsScanHeadWaitUntilProfilesAvailable(scan_head, 1, 10000);
       if (0 > r) {
-        throw joescan::ApiError("jsScanHeadGetProfilesAvailable failed", r);
+        throw joescan::ApiError(
+          "jsScanHeadWaitUntilProfilesAvailable failed", r);
       }
 
       uint32_t profiles_available = r;
