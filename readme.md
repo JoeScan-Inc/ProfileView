@@ -8,8 +8,10 @@ The code provided here should be considered to be a "work in progress" and is no
 
 ## Compiling
 
-CMake is used to orchestrate compilation. Outside of the usual CMake dependencies, a local copy of the Pinchot C API code needs to be provided. The open source version is available [here](https://github.com/JoeScan-Inc/pinchot-c-api). The path to the API directory must be passed to CMake in the following manner.
-
+CMake is used to orchestrate compilation. Outside of the usual CMake dependencies, a local copy of the Pinchot C API code needs to be provided. The open source version is available [here](https://github.com/JoeScan-Inc/pinchot-c-api). The path to the API directory must be passed to CMake when generating the build files as demonstrated below:
 ```
-cmake -DPINCHOT_API_ROOT_DIR=path/to/pinchot/c/api
+mkdir build
+cd build
+cmake -DPINCHOT_API_ROOT_DIR=path/to/pinchot/c/api ..
+# build files generated, can now run make or build using Visual Studio
 ```
