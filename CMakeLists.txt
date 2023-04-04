@@ -1,13 +1,16 @@
-cmake_minimum_required (VERSION 3.1)
+cmake_minimum_required (VERSION 3.20)
 project(js50-profile-view)
 
-cmake_minimum_required (VERSION 3.20)
 set(CMAKE_VERBOSE_MAKEFILE ON)
 
 if(NOT DEFINED PINCHOT_API_ROOT_DIR)
   message(FATAL_ERROR 
   "PINCHOT_API_ROOT_DIR not defined!\n"
   "please set using -PINCHOT_API_ROOT_DIR=")
+else()
+  if(PINCHOT_API_ROOT_DIR STREQUAL "")
+	  message(FATAL_ERROR "PINCHOT_API_ROOT_DIR is empty, please provide a path to the pinchot API root directory")
+  endif()
 endif()
 
 set(PINCHOT_API_ROOT_DIR "" CACHE FILEPATH "this is a dumb cmake command")
@@ -57,4 +60,8 @@ add_executable(${CMAKE_PROJECT_NAME} ${PROJECT_SOURCES})
 target_link_libraries(${CMAKE_PROJECT_NAME} PUBLIC ${LINK_LIBS})
 
 list(APPEND CMAKE_MODULE_PATH ${PINCHOT_API_ROOT_DIR})
-include(PinchotBuildApplication)
+include(PinchotBuildApplication RESULT_VARIABLE HAVE_PINCHOT_BUILD_APP)
+#Could get rid of this since include already throws an error if it cant find the cmake file but adds some clarity
+if(NOT HAVE_PINCHOT_BUILD_APP)
+  message("PinchotBuildApplication was not found meaning PINCHOT_API_ROOT_DIR was likely not set propperly")
+endif()
