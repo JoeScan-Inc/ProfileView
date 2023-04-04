@@ -9,7 +9,7 @@ if(NOT DEFINED PINCHOT_API_ROOT_DIR)
   "please set using -PINCHOT_API_ROOT_DIR=")
 else()
   if(PINCHOT_API_ROOT_DIR STREQUAL "")
-	  message(FATAL_ERROR "PINCHOT_API_ROOT_DIR is empty, please provide a path to the pinchot API root directory")
+    message(FATAL_ERROR "PINCHOT_API_ROOT_DIR is empty, please provide path to Pinchot C API root directory")
   endif()
 endif()
 
@@ -61,7 +61,8 @@ target_link_libraries(${CMAKE_PROJECT_NAME} PUBLIC ${LINK_LIBS})
 
 list(APPEND CMAKE_MODULE_PATH ${PINCHOT_API_ROOT_DIR})
 include(PinchotBuildApplication RESULT_VARIABLE HAVE_PINCHOT_BUILD_APP)
+
 #Could get rid of this since include already throws an error if it cant find the cmake file but adds some clarity
 if(NOT HAVE_PINCHOT_BUILD_APP)
-  message("PinchotBuildApplication was not found meaning PINCHOT_API_ROOT_DIR was likely not set propperly")
+  message("PinchotBuildApplication was not found, check PINCHOT_API_ROOT_DIR define")
 endif()
