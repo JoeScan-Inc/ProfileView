@@ -69,18 +69,6 @@ struct Constraints {
   uint32_t steps;
 };
 
-/**
- * @brief Struct used to track all the results (centers of circles)
-*/
-struct jsCircleHoughResults {
-  jsCircleHoughResults() {
-    count = 0;
-  }
-
-  int32_t count;
-  std::vector<jsCircleHoughResult> results;
-};
-
 class CircleHough {
  public:
   CircleHough(int32_t radius, jsCircleHoughConstraints *c) :
@@ -107,9 +95,12 @@ class CircleHough {
 
   ~CircleHough() = default;
 
-  jsCircleHoughResult map(jsProfile* profile)
+  jsCircleHoughResults * map(jsProfile* profile)
   {
-    jsCircleHoughResult results;
+    int32_t const center_count = 3;
+    jsCircleHoughResults center_results[center_count];
+
+    jsCircleHoughResults results;
     results.weight = 0.0;
     results.x = 0;
     results.y = 0;
@@ -137,7 +128,7 @@ class CircleHough {
 
       //finding all possible circles that could run through this point?
       for (int y = y_start; y < y_end; y++) {
-        for (int x = x_start; x < x_end; x++){
+        for (int x = x_start; x < x_end; x++) {
           auto a = static_cast<double>(p.x - m_bx[x]);
           auto b = static_cast<double>(p.y - m_by[y]);
           auto r_sqr = (a * a) + (b * b);
@@ -149,16 +140,26 @@ class CircleHough {
           auto r = sqrt(r_sqr);
           double px = m_dist.pdf(r);
           m_bins[y][x] += px;
-          if (m_bins[y][x] > results.weight) {
-            results.weight = m_bins[y][x];
-            results.x = m_bx[x];
-            results.y = m_by[y];
+
+          for(int i = 0; i < center_count; i++) {
+            if ((m_bins[y][x] > center_results[i].weight) && !in_range_of_others(i, m_bx[x], m_by[y], center_results, center_count)) {
+            //if (m_bins[y][x] > center_results[i].weight) {
+              center_results[i].weight = m_bins[y][x];
+              center_results[i].x = m_bx[x];
+              center_results[i].y = m_by[y];
+              break;
+              //i = center_count;
+            }
           }
         }
       }
     }
 
-    return results;
+    for(int c = 0; c < center_count; c++) {
+      std::cout << "weight: " << center_results[c].weight << std::endl;
+      std::cout << "center " << c << " locations: x = " << center_results[c].x << " y = " << center_results[c].y << std::endl;
+    }
+    return center_results;
   }
 
  private:
@@ -177,6 +178,19 @@ class CircleHough {
     }
 
     return v;
+  }
+
+  bool in_range_of_others(int32_t index, int32_t x, int32_t y, jsCircleHoughResults * other_circles, int32_t circle_count) {
+    for (unsigned int i = 0; i < circle_count; i++) {
+      if (i != index) {
+        jsCircleHoughResults cur_circle = other_circles[i];
+        uint32_t dist = static_cast<int32_t>(sqrt(pow((x - cur_circle.x), 2.0) + pow((y - cur_circle.y), 2.0)));
+        if (dist < m_radius) {
+          return true;
+        }
+      } 
+    }
+    return false;
   }
 
   std::vector<std::vector<double>> zeros(int col, int row)
@@ -226,7 +240,7 @@ jsCircleHough jsCircleHoughCreate(int32_t radius, jsCircleHoughConstraints *c)
   return static_cast<jsCircleHough>(ch);
 }
 
-jsCircleHoughResult jsCircleHoughCalculate(jsCircleHough circle_hough,
+jsCircleHoughResults* jsCircleHoughCalculate(jsCircleHough circle_hough,
                                             jsProfile *profile)
 {
   CircleHough *ch = static_cast<CircleHough*>(circle_hough);

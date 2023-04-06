@@ -35,7 +35,7 @@ typedef struct {
   int32_t x = 0;
   /// y coordinate of center of circle in 1/1000 inches
   int32_t y = 0;
-} jsCircleHoughResult;
+} jsCircleHoughResults;
 
 /**
  * @brief Creates jsCircleHough to be used for circle detection.
@@ -53,7 +53,7 @@ jsCircleHough jsCircleHoughCreate(int32_t radius, jsCircleHoughConstraints *c);
  * @param profile The data profile to search for circle.
  * @return The results of the calcualation indicating where a circle may be.
  */
-jsCircleHoughResult jsCircleHoughCalculate(jsCircleHough circle_hough,
+jsCircleHoughResults* jsCircleHoughCalculate(jsCircleHough circle_hough,
                                             jsProfile *profile);
 
 /**

@@ -105,10 +105,10 @@ int main(int argc, char* argv[])
 
   //Creates the circleHough constraints which were obtained from scan_gui_example - not sure exactly how these values were set
   //Also creates a scrolling buffer which is used to track the center information (x, y)
-  CircleCenter single_center;
   int32_t current_time = 0;
   
   //Hough transform constraints
+  int32_t const circle_count = 3;
   int32_t radius = 1500;
   jsCircleHoughConstraints c;
   c.step_size = 50;
@@ -116,6 +116,8 @@ int main(int argc, char* argv[])
   c.x_upper = 15000;
   c.y_lower = -30000;
   c.y_upper = 30000;
+  
+  CircleCenter centers[circle_count];
 
   for (int i = 0; i < kMaxElementCount; ++i) {
     is_element_enabled[i] = true;
@@ -276,8 +278,11 @@ int main(int argc, char* argv[])
         laser_on_time_us[idx] = profile.laser_on_time_us;
 
         auto res = jsCircleHoughCalculate(circle_hough, &profile);
-        single_center.x = res.x / 1000.0;
-        single_center.y = res.y / 1000.0;
+        for(int i = 0; i < circle_count; i++) {
+          centers[i].x = res[i].x / 1000.0;
+          centers[i].y = res[i].y / 1000.0;
+          //std::cout << "circle " << i << " center: x = " << centers[i].x << " y = " << centers[i].y << std::endl;
+        }
         
         // Worst case, we redraw laser1 data
         for (uint32_t n = 0; n < profile.data_len; n++) {
@@ -302,7 +307,10 @@ int main(int argc, char* argv[])
 
         if (is_element_enabled[i]) {
           ImPlot::PlotScatter(legend, x_data[i], y_data[i], data_length[i]);
-          ImPlot::Annotation(single_center.x, single_center.y, ImPlot::GetLastItemColor(), ImVec2(10, 10), true, "CircleCenter");
+          for(int k = 0; k < circle_count; k++) {
+            std::string label_name = "CircleCenter " + std::to_string(k);
+            ImPlot::Annotation(centers[k].x, centers[k].y, ImPlot::GetLastItemColor(), ImVec2(10, 10), false, label_name.c_str());
+          }
         }
       }
 
