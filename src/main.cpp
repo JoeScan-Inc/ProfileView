@@ -117,7 +117,9 @@ int main(int argc, char* argv[])
   c.y_lower = -30000;
   c.y_upper = 30000;
   
+  //CircleCenter centers;
   CircleCenter centers[circle_count];
+  jsCircleHoughResults * hough_results;
 
   for (int i = 0; i < kMaxElementCount; ++i) {
     is_element_enabled[i] = true;
@@ -136,7 +138,7 @@ int main(int argc, char* argv[])
     jsProfile profile;
     jsCircleHough circle_hough;
 
-    circle_hough = jsCircleHoughCreate(radius, &c);
+    circle_hough = jsCircleHoughCreate(radius, circle_count, &c);
 
     app.SetSerialNumber(serial_number);
     app.Connect();
@@ -277,12 +279,14 @@ int main(int argc, char* argv[])
         data_length[idx] = profile.data_len;
         laser_on_time_us[idx] = profile.laser_on_time_us;
 
-        auto res = jsCircleHoughCalculate(circle_hough, &profile);
+        hough_results = jsCircleHoughCalculate(circle_hough, &profile);
         for(int i = 0; i < circle_count; i++) {
-          centers[i].x = res[i].x / 1000.0;
-          centers[i].y = res[i].y / 1000.0;
-          //std::cout << "circle " << i << " center: x = " << centers[i].x << " y = " << centers[i].y << std::endl;
+          centers[i].x = hough_results[i].x / 1000.0;
+          centers[i].y = hough_results[i].y / 1000.0;
         }
+
+        // Clear up the memory which was created in the jsCircleHough map function once we copy over the center locations
+        delete hough_results;
         
         // Worst case, we redraw laser1 data
         for (uint32_t n = 0; n < profile.data_len; n++) {
@@ -308,7 +312,7 @@ int main(int argc, char* argv[])
         if (is_element_enabled[i]) {
           ImPlot::PlotScatter(legend, x_data[i], y_data[i], data_length[i]);
           for(int k = 0; k < circle_count; k++) {
-            std::string label_name = "CircleCenter " + std::to_string(k);
+            std::string label_name = "CircleCenter " + std::to_string(k + 1);
             ImPlot::Annotation(centers[k].x, centers[k].y, ImPlot::GetLastItemColor(), ImVec2(10, 10), false, label_name.c_str());
           }
         }

@@ -44,7 +44,7 @@ typedef struct {
  * @param c Constraints for circle finding detection.
  * @return Address to new object on success, `NULL` on error.
  */
-jsCircleHough jsCircleHoughCreate(int32_t radius, jsCircleHoughConstraints *c);
+jsCircleHough jsCircleHoughCreate(int32_t radius, int32_t num_circles, jsCircleHoughConstraints *c);
 
 /**
  * @brief Runs Circle Hough Transform to attempt to find a circle.
