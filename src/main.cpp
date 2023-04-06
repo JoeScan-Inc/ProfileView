@@ -9,6 +9,7 @@
 #include "implot.h"
 #include "joescan_pinchot.h"
 #include "jsScanApplication.hpp"
+#include "jsCircleHough.h"
 #include <vector>
 #include <iostream>
 #include <fstream>
@@ -75,6 +76,15 @@ static void apply_alignment_json(jsScanHead &scan_head)
 }
 #endif
 
+struct CircleCenter {
+  double x;
+  double y;
+  CircleCenter() {
+    x = 0.0;
+    y = 0.0;
+  }
+};
+
 static void glfw_error_callback(int error, const char* description)
 {
   fprintf(stderr, "Glfw Error %d: %s\n", error, description);
@@ -93,6 +103,20 @@ int main(int argc, char* argv[])
   uint32_t serial_number;
   int32_t r = 0;
 
+  //Creates the circleHough constraints which were obtained from scan_gui_example - not sure exactly how these values were set
+  //Also creates a scrolling buffer which is used to track the center information (x, y)
+  CircleCenter single_center;
+  int32_t current_time = 0;
+  
+  //Hough transform constraints
+  int32_t radius = 1500;
+  jsCircleHoughConstraints c;
+  c.step_size = 50;
+  c.x_lower = -15000;
+  c.x_upper = 15000;
+  c.y_lower = -30000;
+  c.y_upper = 30000;
+
   for (int i = 0; i < kMaxElementCount; ++i) {
     is_element_enabled[i] = true;
   }
@@ -108,6 +132,9 @@ int main(int argc, char* argv[])
     joescan::ScanApplication app;
     jsScanHead scan_head;
     jsProfile profile;
+    jsCircleHough circle_hough;
+
+    circle_hough = jsCircleHoughCreate(radius, &c);
 
     app.SetSerialNumber(serial_number);
     app.Connect();
@@ -116,7 +143,7 @@ int main(int argc, char* argv[])
     app.SetWindow(40.0, -40.0, -40.0, 40.0);
     app.Configure();
     app.ConfigureDistinctElementPhaseTable();
-    app.StartScanning();
+    app.StartScanning(20000);
 
     scan_head = app.GetScanHeads()[0];
     jsScanHeadCapabilities cap;
@@ -233,6 +260,8 @@ int main(int argc, char* argv[])
       }
 
       uint32_t profiles_available = r;
+      // Could also take the calculations outside of the for loop so that we only calculate center for the last profile
+      // Would also have to make sure that profile exists before trying to run the calculations on it
       for (uint32_t k = 0; k < profiles_available; k++) {
         r = jsScanHeadGetProfiles(scan_head, &profile, 1);
         if (0 > r) {
@@ -246,6 +275,10 @@ int main(int argc, char* argv[])
         data_length[idx] = profile.data_len;
         laser_on_time_us[idx] = profile.laser_on_time_us;
 
+        auto res = jsCircleHoughCalculate(circle_hough, &profile);
+        single_center.x = res.x / 1000.0;
+        single_center.y = res.y / 1000.0;
+        
         // Worst case, we redraw laser1 data
         for (uint32_t n = 0; n < profile.data_len; n++) {
           x_data[idx][n] = profile.data[n].x / 1000.0;
@@ -269,6 +302,7 @@ int main(int argc, char* argv[])
 
         if (is_element_enabled[i]) {
           ImPlot::PlotScatter(legend, x_data[i], y_data[i], data_length[i]);
+          ImPlot::Annotation(single_center.x, single_center.y, ImPlot::GetLastItemColor(), ImVec2(10, 10), true, "CircleCenter");
         }
       }
 
