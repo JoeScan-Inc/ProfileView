@@ -24,13 +24,6 @@
 #pragma fp_contract(on)             // enable contractions
 #endif
 
-bool result_sorter(jsCircleHoughResults const& lhs, jsCircleHoughResults const& rhs)
-{
-  if (lhs.x != rhs.x) {
-    return lhs.x < rhs.x;
-  }
-}
-
 /**
  * @brief Class used to calculating a symmetric triangle distribution.
  */
@@ -156,7 +149,6 @@ class CircleHough {
 
     }
     std::sort(center_results, center_results+m_circle_count, &result_sorter);
-
     return center_results;
   }
 
@@ -178,7 +170,9 @@ class CircleHough {
     return v;
   }
 
-// Essentially checks if this detected center is already accounted for in one of the other circle center results
+  /**
+   * @brief Function to determine if current potential center is already accounted for in one of the other circle hough results
+  */
   bool in_range_of_others(int32_t index, int32_t x, int32_t y, jsCircleHoughResults * other_circles, int32_t circle_count) {
     for (unsigned int i = 0; i < circle_count; i++) {
       if (i != index) {
@@ -255,4 +249,11 @@ void jsCircleHoughFree(jsCircleHough circle_hough)
   CircleHough *ch = static_cast<CircleHough*>(circle_hough);
 
   delete ch;
+}
+
+bool result_sorter(jsCircleHoughResults const& lhs, jsCircleHoughResults const& rhs)
+{
+  if (lhs.x != rhs.x) {
+    return lhs.x < rhs.x;
+  }
 }

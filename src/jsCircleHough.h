@@ -63,4 +63,9 @@ jsCircleHoughResults* jsCircleHoughCalculate(jsCircleHough circle_hough,
  */
 void jsCircleHoughFree(jsCircleHough circle_hough);
 
+/**
+ * @brief Assists in sorting the CircleHough results by x-coordinate
+*/
+bool result_sorter(jsCircleHoughResults const& lhs, jsCircleHoughResults const& rhs);
+
 #endif

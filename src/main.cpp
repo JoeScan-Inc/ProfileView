@@ -123,7 +123,7 @@ double calculate_distance(double x, double y)
 /**
  * @brief Function used to determine the rotation of the fixture
 */
-double set_fixture_rotation(CircleCenter * centers, int32_t center_count) 
+double get_fixture_rotation(CircleCenter * centers, int32_t center_count)
 {
   //middle_circle is the circle in the middle of the fixture
   //closer_circle is the circle that is nearest the middle circle in the fixture
@@ -136,10 +136,12 @@ double set_fixture_rotation(CircleCenter * centers, int32_t center_count)
   //Gets the closest circle to the center cirlce
   CircleCenter cur;
   for (int j = 1; j < center_count; j++) {
+    //centers have already been sorted by x position from jsCircleHough map function
     cur = centers[(middle_index + j) % center_count];
     if (j == 1) {
       closer_circle = cur;
     } else {
+      //Could probably get away with just using the x or the y position but for accuracy we'll use Euclidean distance
       double new_distance = calculate_distance(middle_circle.x - cur.x, middle_circle.y - cur.y);
       double cur_distance = calculate_distance(middle_circle.x - closer_circle.x, middle_circle.y - closer_circle.y);
       if (new_distance < cur_distance) {
@@ -150,6 +152,10 @@ double set_fixture_rotation(CircleCenter * centers, int32_t center_count)
 
   //Set the rotation based on the these cirlce's positions
   rotation = atan((closer_circle.y - middle_circle.y) / (closer_circle.x - middle_circle.x)) * 180 / PI;
+  if (center_count == 2) {
+    return rotation;
+  }
+  //Adjustments to account for which quadrent of the unit circle we are in
   if (closer_circle.y > middle_circle.y && closer_circle.x < middle_circle.x) {
     rotation += 180;
   } else if (closer_circle.y < middle_circle.y && closer_circle.x < middle_circle.x) {
@@ -174,7 +180,7 @@ int main(int argc, char* argv[])
   int32_t r = 0;
 
   //Hough transform constraints
-  int32_t const circle_count = 3;
+  int32_t circle_count = 3;
   int32_t radius = 1500;
   jsCircleHoughConstraints c;
   c.step_size = 50;
@@ -183,8 +189,6 @@ int main(int argc, char* argv[])
   c.y_lower = -30000;
   c.y_upper = 30000;
   
-  //CircleCenter centers;
-  CircleCenter centers[circle_count];
   jsCircleHoughResults * hough_results;
   Fixture fixture;
 
@@ -192,10 +196,18 @@ int main(int argc, char* argv[])
     is_element_enabled[i] = true;
   }
 
-  if (2 != argc) {
+  if (2 > argc) {
     std::cout << "Usage: " << argv[0] << " SERIAL" << std::endl;
+    std::cout << "Optional Usage:" <<argv[0] << " SERIAL NUMBER_OF_CIRLCES RADIUS (in 1000ths of inches)" << std::endl;
     return 1;
   }
+  if (4 == argc) {
+    circle_count = strtol(argv[2], NULL, 0);
+    radius = strtol(argv[3], NULL, 0);
+  }
+  
+  //CircleCenter centers;
+  CircleCenter * centers = new CircleCenter [circle_count];
 
   serial_number = strtoul(argv[1], NULL, 0);
 
@@ -214,6 +226,7 @@ int main(int argc, char* argv[])
     app.SetWindow(40.0, -40.0, -40.0, 40.0);
     app.Configure();
     app.ConfigureDistinctElementPhaseTable();
+    //Sets the scanning period to be once every 20,000 or 0.02 seconds (frame rate is a frame every 0.016 seconds)
     app.StartScanning(20000);
 
     scan_head = app.GetScanHeads()[0];
@@ -312,8 +325,6 @@ int main(int argc, char* argv[])
 
       ImGui::Text("Encoder = %lu", (int64_t) profile.encoder_values[0]);
       ImGui::Text("X = %f, Y = %f   Rotation = %d", (double) fixture.x, (double) fixture.y, (uint32_t) fixture.rotation);
-      //ImGui::Text("Y = %f", (double) fixture.y);
-      //ImGui::Text("Rotation = %d", (int32_t) fixture.rotation);
 
       auto is_plot_sucess = ImPlot::BeginPlot("Profile Plot",
                                               "X [inches]",
@@ -334,8 +345,6 @@ int main(int argc, char* argv[])
       }
 
       uint32_t profiles_available = r;
-      // Could also take the calculations outside of the for loop so that we only calculate center for the last profile
-      // Would also have to make sure that profile exists before trying to run the calculations on it
       for (uint32_t k = 0; k < profiles_available; k++) {
         r = jsScanHeadGetProfiles(scan_head, &profile, 1);
         if (0 > r) {
@@ -348,15 +357,23 @@ int main(int argc, char* argv[])
 
         data_length[idx] = profile.data_len;
         laser_on_time_us[idx] = profile.laser_on_time_us;
-
-        hough_results = jsCircleHoughCalculate(circle_hough, &profile);
-        for(int i = 0; i < circle_count; i++) {
-          centers[i].x = hough_results[i].x / 1000.0;
-          centers[i].y = hough_results[i].y / 1000.0;
-        }
         
-        // Clear up the memory which was created in the jsCircleHough map function once we copy over the center locations
-        delete hough_results;
+        if (circle_count > 0) {
+          hough_results = jsCircleHoughCalculate(circle_hough, &profile);
+          for(int i = 0; i < circle_count; i++) {
+            centers[i].x = hough_results[i].x / 1000.0;
+            centers[i].y = hough_results[i].y / 1000.0;
+          }
+          
+          delete hough_results;
+          
+          fixture.x = (centers[0].x + centers[circle_count-1].x) / 2;
+          fixture.y = (centers[0].y + centers[circle_count-1].y) / 2;
+          if (circle_count > 1) {
+            fixture.rotation = get_fixture_rotation(centers, circle_count);
+          }
+
+        }
 
         // Worst case, we redraw laser1 data
         for (uint32_t n = 0; n < profile.data_len; n++) {
@@ -365,11 +382,6 @@ int main(int argc, char* argv[])
         }
       }
       
-      //set_fixture_position(centers, circle_count, &fixture);
-      fixture.x = (centers[0].x + centers[circle_count-1].x) / 2;
-      fixture.y = (centers[0].y + centers[circle_count-1].y) / 2;
-      fixture.rotation = set_fixture_rotation(centers, circle_count);
-
       char legend[32];
       for (uint32_t i = 0; i < element_count; i++)
       {
@@ -388,10 +400,11 @@ int main(int argc, char* argv[])
           ImPlot::PlotScatter(legend, x_data[i], y_data[i], data_length[i]);
         }
       }
-      
-      for(int k = 0; k < circle_count; k++) {
-        std::string label_name = "CircleCenter " + std::to_string(k + 1);
-        ImPlot::Annotation(centers[k].x, centers[k].y, ImPlot::GetLastItemColor(), ImVec2(10, 10), true, label_name.c_str());
+      if (circle_count > 0) {
+        for(int k = 0; k < circle_count; k++) {
+          std::string label_name = "CircleCenter " + std::to_string(k + 1);
+          ImPlot::Annotation(centers[k].x, centers[k].y, ImPlot::GetLastItemColor(), ImVec2(10, 10), true, label_name.c_str());
+        }
       }
 
       ImPlot::EndPlot();
@@ -412,6 +425,7 @@ int main(int argc, char* argv[])
     }
 
     app.StopScanning();
+    jsCircleHoughFree(circle_hough);
 
   } catch (joescan::ApiError &e) {
     std::cout << "ERROR: " << e.what() << std::endl;
@@ -434,5 +448,6 @@ int main(int argc, char* argv[])
   glfwDestroyWindow(window);
   glfwTerminate();
 
+  delete centers;
   return 0;
 }
