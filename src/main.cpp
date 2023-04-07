@@ -13,6 +13,7 @@
 #include <vector>
 #include <iostream>
 #include <fstream>
+#include <cmath>
 
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl2.h"
@@ -31,6 +32,8 @@
 #if defined(_MSC_VER) && (_MSC_VER >= 1900) && !defined(IMGUI_DISABLE_WIN32_FUNCTIONS)
 #pragma comment(lib, "legacy_stdio_definitions")
 #endif
+
+#define PI 3.14159265
 
 #if 0
 #include "json.hpp"
@@ -76,6 +79,9 @@ static void apply_alignment_json(jsScanHead &scan_head)
 }
 #endif
 
+/**
+ * @brief Struct to define the center of a circle
+*/
 struct CircleCenter {
   double x;
   double y;
@@ -85,9 +91,73 @@ struct CircleCenter {
   }
 };
 
+/**
+ * @brief Struct to define the fixture in the scene
+*/
+struct Fixture {
+  double x;
+  double y;
+  uint32_t rotation;
+  Fixture() {
+    x = 0.0;
+    y = 0.0;
+    rotation = 0;
+  }
+};
+
 static void glfw_error_callback(int error, const char* description)
 {
   fprintf(stderr, "Glfw Error %d: %s\n", error, description);
+}
+
+double calculate_distance(double x, double y)
+{
+  double dist;
+
+  dist = pow(x, 2) + pow(y, 2);
+  dist = sqrt(dist);
+
+  return dist;
+}
+
+/**
+ * @brief Function used to determine the rotation of the fixture
+*/
+double set_fixture_rotation(CircleCenter * centers, int32_t center_count) 
+{
+  //middle_circle is the circle in the middle of the fixture
+  //closer_circle is the circle that is nearest the middle circle in the fixture
+  // 0----0--0 is generally what the fixture looks like
+  int32_t middle_index = center_count / 2;
+  CircleCenter middle_circle = centers[middle_index];
+  CircleCenter closer_circle;
+  int32_t rotation = 0;
+
+  //Gets the closest circle to the center cirlce
+  CircleCenter cur;
+  for (int j = 1; j < center_count; j++) {
+    cur = centers[(middle_index + j) % center_count];
+    if (j == 1) {
+      closer_circle = cur;
+    } else {
+      double new_distance = calculate_distance(middle_circle.x - cur.x, middle_circle.y - cur.y);
+      double cur_distance = calculate_distance(middle_circle.x - closer_circle.x, middle_circle.y - closer_circle.y);
+      if (new_distance < cur_distance) {
+        closer_circle = cur;
+      }
+    }
+  }
+
+  //Set the rotation based on the these cirlce's positions
+  rotation = atan((closer_circle.y - middle_circle.y) / (closer_circle.x - middle_circle.x)) * 180 / PI;
+  if (closer_circle.y > middle_circle.y && closer_circle.x < middle_circle.x) {
+    rotation += 180;
+  } else if (closer_circle.y < middle_circle.y && closer_circle.x < middle_circle.x) {
+    rotation += 180;
+  } else if (closer_circle.y < middle_circle.y && closer_circle.x > middle_circle.x) {
+    rotation += 360;
+  }
+  return rotation;
 }
 
 int main(int argc, char* argv[])
@@ -103,10 +173,6 @@ int main(int argc, char* argv[])
   uint32_t serial_number;
   int32_t r = 0;
 
-  //Creates the circleHough constraints which were obtained from scan_gui_example - not sure exactly how these values were set
-  //Also creates a scrolling buffer which is used to track the center information (x, y)
-  int32_t current_time = 0;
-  
   //Hough transform constraints
   int32_t const circle_count = 3;
   int32_t radius = 1500;
@@ -120,6 +186,7 @@ int main(int argc, char* argv[])
   //CircleCenter centers;
   CircleCenter centers[circle_count];
   jsCircleHoughResults * hough_results;
+  Fixture fixture;
 
   for (int i = 0; i < kMaxElementCount; ++i) {
     is_element_enabled[i] = true;
@@ -244,6 +311,9 @@ int main(int argc, char* argv[])
       }
 
       ImGui::Text("Encoder = %lu", (int64_t) profile.encoder_values[0]);
+      ImGui::Text("X = %f, Y = %f   Rotation = %d", (double) fixture.x, (double) fixture.y, (uint32_t) fixture.rotation);
+      //ImGui::Text("Y = %f", (double) fixture.y);
+      //ImGui::Text("Rotation = %d", (int32_t) fixture.rotation);
 
       auto is_plot_sucess = ImPlot::BeginPlot("Profile Plot",
                                               "X [inches]",
@@ -284,16 +354,21 @@ int main(int argc, char* argv[])
           centers[i].x = hough_results[i].x / 1000.0;
           centers[i].y = hough_results[i].y / 1000.0;
         }
-
+        
         // Clear up the memory which was created in the jsCircleHough map function once we copy over the center locations
         delete hough_results;
-        
+
         // Worst case, we redraw laser1 data
         for (uint32_t n = 0; n < profile.data_len; n++) {
           x_data[idx][n] = profile.data[n].x / 1000.0;
           y_data[idx][n] = profile.data[n].y / 1000.0;
         }
       }
+      
+      //set_fixture_position(centers, circle_count, &fixture);
+      fixture.x = (centers[0].x + centers[circle_count-1].x) / 2;
+      fixture.y = (centers[0].y + centers[circle_count-1].y) / 2;
+      fixture.rotation = set_fixture_rotation(centers, circle_count);
 
       char legend[32];
       for (uint32_t i = 0; i < element_count; i++)
@@ -311,11 +386,12 @@ int main(int argc, char* argv[])
 
         if (is_element_enabled[i]) {
           ImPlot::PlotScatter(legend, x_data[i], y_data[i], data_length[i]);
-          for(int k = 0; k < circle_count; k++) {
-            std::string label_name = "CircleCenter " + std::to_string(k + 1);
-            ImPlot::Annotation(centers[k].x, centers[k].y, ImPlot::GetLastItemColor(), ImVec2(10, 10), false, label_name.c_str());
-          }
         }
+      }
+      
+      for(int k = 0; k < circle_count; k++) {
+        std::string label_name = "CircleCenter " + std::to_string(k + 1);
+        ImPlot::Annotation(centers[k].x, centers[k].y, ImPlot::GetLastItemColor(), ImVec2(10, 10), true, label_name.c_str());
       }
 
       ImPlot::EndPlot();

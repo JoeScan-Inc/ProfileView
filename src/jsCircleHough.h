@@ -30,11 +30,11 @@ typedef struct {
 
 typedef struct {
   /// confidence circle was detected, higher values imply greater confidence
-  double weight = 0.0;
+  double weight;
   /// x coordinate of center of circle in 1/1000 inches
-  int32_t x = 0;
+  int32_t x;
   /// y coordinate of center of circle in 1/1000 inches
-  int32_t y = 0;
+  int32_t y;
 } jsCircleHoughResults;
 
 /**

@@ -11,6 +11,7 @@
 #include <cstring>
 #include <vector>
 #include <iostream>
+#include <algorithm>
 
 #ifdef __linux__
 // Linux specific build details
@@ -23,10 +24,16 @@
 #pragma fp_contract(on)             // enable contractions
 #endif
 
+bool result_sorter(jsCircleHoughResults const& lhs, jsCircleHoughResults const& rhs)
+{
+  if (lhs.x != rhs.x) {
+    return lhs.x < rhs.x;
+  }
+}
+
 /**
  * @brief Class used to calculating a symmetric triangle distribution.
  */
-// A little confused as to why this is a symmetric triangle distribution as opposed to some other kind of distribution?
 class SymTriangleDist {
  public:
   SymTriangleDist(double mu, double sigma) :
@@ -78,19 +85,16 @@ class CircleHough {
     m_radius(radius),
     m_circle_count(num_cirlces)
   {
-    std::cout << "radius within constructor " << radius/1000.0 << " inches" << std::endl;
+    std::cout << "radius for circle tracking is " << radius/1000.0 << " inches" << std::endl;
     assert(m_cx.lower < m_cx.upper);
     assert(m_cy.lower < m_cy.upper);
     assert(m_cx.step_size > 0);
     assert(m_cy.step_size > 0);
-    //doesnt do anything if it fails
     assert(m_radius > 0);
 
-    //Creates a grid x, y axis for our scene as well as the values of the grid
     m_bx = linrange(m_cx.lower, m_cx.upper, m_cx.step_size, m_cx.steps);
     m_by = linrange(m_cy.lower, m_cy.upper, m_cy.step_size, m_cy.steps);
     m_bins = zeros(m_cy.steps, m_cx.steps);
-    //Not really sure why we only have a set values for the y axis?
     m_is_set = std::vector<bool>(m_cy.steps, false);
   }
 
@@ -99,25 +103,23 @@ class CircleHough {
   jsCircleHoughResults * map(jsProfile* profile)
   {
     jsCircleHoughResults * center_results = new jsCircleHoughResults [m_circle_count];
+    for (int32_t i = 0; i < m_circle_count; i++) {
+      center_results[i].weight = 0.0;
+      center_results[i].x = 0;
+      center_results[i].y = 0;
+    }
 
-    jsCircleHoughResults results;
-    results.weight = 0.0;
-    results.x = 0;
-    results.y = 0;
     // we know X and Y have same step size
     int32_t step_size = m_cx.step_size;
     int32_t radius = m_radius;
 
-    //greatest and smallest size of the circle "rounded" to the nearest step size
     double upper_lim = pow(radius + step_size, 2);
     double lower_lim = pow(radius - step_size, 2);
 
-    //zeros out the values of the grid
     for (uint32_t n = 0; n < m_bins.size(); n++) {
       std::fill(m_bins[n].begin(), m_bins[n].end(), 0.0);
     }
 
-    //meat of the hough function
     for (uint32_t n = 0; n < profile->data_len; n++) {
       jsProfileData p = profile->data[n];
 
@@ -126,7 +128,6 @@ class CircleHough {
       int32_t y_start = find_index(p.y - radius - step_size, m_cy);
       int32_t y_end = find_index(p.y + step_size, m_cy);
 
-      //finding all possible circles that could run through this point?
       for (int y = y_start; y < y_end; y++) {
         for (int x = x_start; x < x_end; x++) {
           auto a = static_cast<double>(p.x - m_bx[x]);
@@ -149,14 +150,13 @@ class CircleHough {
               break;
             }
           }
+
         }
       }
-    }
 
-    //for(int c = 0; c < center_count; c++) {
-      //std::cout << "weight: " << center_results[c].weight << std::endl;
-      //std::cout << "center " << c << " locations: x = " << center_results[c].x << " y = " << center_results[c].y << std::endl;
-    //}
+    }
+    std::sort(center_results, center_results+m_circle_count, &result_sorter);
+
     return center_results;
   }
 
@@ -178,6 +178,7 @@ class CircleHough {
     return v;
   }
 
+// Essentially checks if this detected center is already accounted for in one of the other circle center results
   bool in_range_of_others(int32_t index, int32_t x, int32_t y, jsCircleHoughResults * other_circles, int32_t circle_count) {
     for (unsigned int i = 0; i < circle_count; i++) {
       if (i != index) {
@@ -251,7 +252,6 @@ jsCircleHoughResults* jsCircleHoughCalculate(jsCircleHough circle_hough,
 
 void jsCircleHoughFree(jsCircleHough circle_hough)
 {
-  std::cout << "called the freeing function to free memory" << std::endl;
   CircleHough *ch = static_cast<CircleHough*>(circle_hough);
 
   delete ch;
