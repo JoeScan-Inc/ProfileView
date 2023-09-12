@@ -12,6 +12,8 @@
 #include <vector>
 #include <iostream>
 #include <fstream>
+#include <mutex>
+#include <thread>
 
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl2.h"
@@ -30,6 +32,9 @@
 #if defined(_MSC_VER) && (_MSC_VER >= 1900) && !defined(IMGUI_DISABLE_WIN32_FUNCTIONS)
 #pragma comment(lib, "legacy_stdio_definitions")
 #endif
+
+static std::mutex lock;
+static std::vector<jsProfile> master_profiles;
 
 #if 0
 #include "json.hpp"
@@ -82,13 +87,220 @@ static void glfw_error_callback(int error, const char* description)
 
 static void receiver(jsScanHead scan_head)
 {
+  const int max_profiles = 100;
+  jsProfile *profiles = nullptr;
+  profiles = new jsProfile[max_profiles];
   auto id = jsScanHeadGetId(scan_head);
+
+  {
+    std::lock_guard<std::mutex> guard(lock);
+    std::cout << "begin receiving on scan head ID " << id << std::endl;
+  }
+
+  // For this example, we'll grab some profiles and then act on the data before
+  // repeating this process again. Note that for high performance applications,
+  // printing to standard out while receiving data should be avoided as it
+  // can add significant latency. This example only prints to standard out to
+  // provide some illustrative feedback to the user, indicating that data
+  // is actively being worked on in multiple threads.
+  uint32_t timeout_us = 1000000;
+  int32_t r = 0;
+  do {
+    jsScanHeadWaitUntilProfilesAvailable(scan_head, max_profiles, timeout_us);
+    r = jsScanHeadGetProfiles(scan_head, profiles, max_profiles);
+    if (0 < r) {
+      {
+        std::lock_guard<std::mutex> guard(lock);
+        for (int j = 0; j < r; j++) {
+          master_profiles.push_back(profiles[j]);
+        }
+      }
+    }
+  } while (0 < r);
+
+  {
+    std::lock_guard<std::mutex> guard(lock);
+    std::cout << "end receiving on scan head ID " << id << std::endl;
+  }
+
+  delete[] profiles;
 }
+
+void initialize_phase_table(jsScanSystem &scan_system,
+                            std::vector<jsScanHead> &scan_heads)
+{
+  int32_t r = 0;
+
+  // Assume that the system is comprised of scan heads that are all the same.
+  jsScanHeadType type = jsScanHeadGetType(scan_heads[0]);
+
+  // For this example we will create a phase table that interleaves lasers
+  // seen by Camera A and Camera B. This allows fast and efficient scanning
+  // by allowing one camera to scan while the other has the scan data read out
+  // & processed; if the same camera is used back to back, a time penalty
+  // will be incurred to ensure scan data isn't overwritten.
+  switch (type) {
+  case (JS_SCAN_HEAD_JS50X6B20):
+  case (JS_SCAN_HEAD_JS50X6B30):
+    // Phase | Laser | Camera
+    //   1   |   1   |   B
+    //   2   |   4   |   A
+    //   3   |   2   |   B
+    //   4   |   5   |   A
+    //   5   |   3   |   B
+    //   6   |   6   |   A
+
+    for (int n = 0; n < 3; n++) {
+      jsLaser laser = JS_LASER_INVALID;
+
+      // Lasers associated with Camera B
+      r = jsScanSystemPhaseCreate(scan_system);
+      if (0 != r) {
+        throw joescan::ApiError("failed to create phase", r);
+      }
+
+      laser = (jsLaser) (JS_LASER_1 + n);
+      for (auto scan_head : scan_heads) {
+        r = jsScanSystemPhaseInsertLaser(scan_system, scan_head, laser);
+        if (0 != r) {
+          throw joescan::ApiError("failed to insert into phase", r);
+        }
+      }
+
+      // Lasers associated with Camera A
+      r = jsScanSystemPhaseCreate(scan_system);
+      if (0 != r) {
+        throw joescan::ApiError("failed to create phase", r);
+      }
+
+      laser = (jsLaser) (JS_LASER_4 + n);
+      for (auto scan_head : scan_heads) {
+        r = jsScanSystemPhaseInsertLaser(scan_system, scan_head, laser);
+        if (0 != r) {
+          throw joescan::ApiError("failed to insert into phase", r);
+        }
+      }
+    }
+    break;
+
+  case (JS_SCAN_HEAD_JS50WSC):
+  case (JS_SCAN_HEAD_JS50MX):
+    // Phase | Laser | Camera
+    //   1   |   1   |   A
+
+    r = jsScanSystemPhaseCreate(scan_system);
+    if (0 != r) {
+      throw joescan::ApiError("failed to create phase", r);
+    }
+
+    for (auto scan_head : scan_heads) {
+      r = jsScanSystemPhaseInsertCamera(scan_system, scan_head, JS_CAMERA_A);
+      if (0 != r) {
+        throw joescan::ApiError("failed to insert into phase", r);
+      }
+    }
+    break;
+
+  case (JS_SCAN_HEAD_JS50WX):
+    // Phase | Laser | Camera
+    //   1   |   1   |   A
+    //   2   |   1   |   B
+
+    r = jsScanSystemPhaseCreate(scan_system);
+    if (0 != r) {
+      throw joescan::ApiError("failed to create phase", r);
+    }
+
+    for (auto scan_head : scan_heads) {
+      r = jsScanSystemPhaseInsertCamera(scan_system, scan_head, JS_CAMERA_A);
+      if (0 != r) {
+        throw joescan::ApiError("failed to insert into phase", r);
+      }
+    }
+
+    r = jsScanSystemPhaseCreate(scan_system);
+    if (0 != r) {
+      throw joescan::ApiError("failed to create phase", r);
+    }
+
+    for (auto scan_head : scan_heads) {
+      r = jsScanSystemPhaseInsertCamera(scan_system, scan_head, JS_CAMERA_B);
+      if (0 != r) {
+        throw joescan::ApiError("failed to insert into phase", r);
+      }
+    }
+    break;
+
+  case (JS_SCAN_HEAD_INVALID_TYPE):
+  default:
+    throw joescan::ApiError("invalid scan head type", 0);
+  }
+}
+
+void initialize_scan_heads(jsScanSystem &scan_system,
+                           std::vector<jsScanHead> &scan_heads,
+                           std::vector<uint32_t> &serial_numbers)
+{
+  int32_t r = 0;
+
+  jsScanHeadConfiguration config;
+  config.camera_exposure_time_min_us = 10000;
+  config.camera_exposure_time_def_us = 47000;
+  config.camera_exposure_time_max_us = 900000;
+  config.laser_on_time_min_us = 100;
+  config.laser_on_time_def_us = 100;
+  config.laser_on_time_max_us = 1000;
+  config.laser_detection_threshold = 120;
+  config.saturation_threshold = 800;
+  config.saturation_percentage = 30;
+
+  // Create a scan head for each serial number passed in on the command line
+  // and configure each one with the same parameters. Note that there is
+  // nothing stopping users from configuring each scan head independently.
+  for (unsigned int i = 0; i < serial_numbers.size(); i++) {
+    uint32_t serial = serial_numbers[i];
+    auto scan_head = jsScanSystemCreateScanHead(scan_system, serial, i);
+    if (0 > scan_head) {
+      throw joescan::ApiError("failed to create scan head", scan_head);
+    }
+    scan_heads.push_back(scan_head);
+
+    uint32_t major, minor, patch;
+    r = jsScanHeadGetFirmwareVersion(scan_head, &major, &minor, &patch);
+    if (0 > r) {
+      throw joescan::ApiError("failed to read firmware version", r);
+    }
+
+    std::cout << serial << " v" << major << "." << minor << "." << patch
+              << std::endl;
+
+    r = jsScanHeadSetConfiguration(scan_head, &config);
+    if (0 > r) {
+      throw joescan::ApiError("failed to configure scan head", r);
+    }
+
+    r = jsScanHeadSetWindowRectangular(scan_head, 40.0, -40.0, -40.0, 40.0);
+    if (0 > r) {
+      throw joescan::ApiError("failed to set scan window", r);
+    }
+
+    r = jsScanHeadSetAlignment(scan_head, 0.0, 0.0, 0.0);
+    if (0 > r) {
+      throw joescan::ApiError("failed to set alignment", r);
+    }
+  }
+}
+
+
 
 int main(int argc, char* argv[])
 {
+  jsScanSystem scan_system;
+  std::vector<jsScanHead> scan_heads;
+  std::thread *threads = nullptr;
+
   const int kMaxElementCount = 6;
-  const int kHeadCount = 2;
+  const int kHeadCount = 100;
   double x_data[kHeadCount][kMaxElementCount][JS_PROFILE_DATA_LEN];
   double y_data[kHeadCount][kMaxElementCount][JS_PROFILE_DATA_LEN];
   int data_length[kHeadCount][kMaxElementCount] = { 0 };
@@ -96,10 +308,14 @@ int main(int argc, char* argv[])
   bool is_element_enabled[kHeadCount][kMaxElementCount];
   bool is_mode_camera = false;
   GLFWwindow* window = nullptr;
-  uint32_t serial_numbers[kHeadCount] = { 20295, 20299 };
   int32_t r = 0;
+  
+  std::vector<uint32_t> serial_numbers;
+  for (int i = 1; i < argc; i++) {
+    serial_numbers.emplace_back(strtoul(argv[i], NULL, 0));
+  }
 
-  for (int j = 0; j < kHeadCount; j++){
+  for (int j = 0; j < serial_numbers.size(); j++){
     for (int i = 0; i < kMaxElementCount; ++i) {
       is_element_enabled[j][i] = true;
     }
@@ -113,24 +329,51 @@ int main(int argc, char* argv[])
   std::cout << "Created variables for app" << std::endl;
 
   try {
-    joescan::ScanApplication app;
-    std::vector<jsScanHead> scan_heads;
+    scan_system = jsScanSystemCreate(JS_UNITS_INCHES);
+    if (0 > scan_system) {
+      throw joescan::ApiError("jsScanSystemCreate failed", scan_system);
+    }
     jsProfile profile;
 
-    std::vector<uint32_t> serials{ 20299, 20295 };
+    initialize_scan_heads(scan_system, scan_heads, serial_numbers);
 
-    app.SetSerialNumber(serials);
-    app.Connect();
-    app.SetThreshold(80);
-    app.SetLaserOn(500, 100, 2000);
-    app.SetWindow(40.0, -40.0, -40.0, 40.0);
-    app.Configure();
-    app.ConfigureDistinctElementPhaseTable();
-    app.StartScanning();
+    r = jsScanSystemConnect(scan_system, 10);
+    if (0 > r) {
+      throw joescan::ApiError("failed to connect to scan heads", r);
+    } else if (jsScanSystemGetNumberScanHeads(scan_system) != r) {
+      // On this error condition, connection was successful to some of the scan
+      // heads in the system. We can query the scan heads to determine which
+      // one successfully connected and which ones failed.
+      for (auto scan_head : scan_heads) {
+        if (false == jsScanHeadIsConnected(scan_head)) {
+          uint32_t serial = jsScanHeadGetSerial(scan_head);
+          std::cout << serial << " is NOT connected" << std::endl;
+        }
+      }
+      throw joescan::ApiError("failed to connect to all scan heads", 0);
+    }
 
-    std::cout << "Started scanning" << std::endl;
+    initialize_phase_table(scan_system, scan_heads);
 
-    scan_heads = app.GetScanHeads();
+    int32_t min_period_us = jsScanSystemGetMinScanPeriod(scan_system);
+    if (0 >= min_period_us) {
+      throw joescan::ApiError("failed to read min scan period", min_period_us);
+    }
+    std::cout << "min scan period is " << min_period_us << " us" << std::endl;
+
+    std::cout << "start scanning" << std::endl;
+    jsDataFormat data_format = JS_DATA_FORMAT_XY_BRIGHTNESS_FULL;
+    r = jsScanSystemStartScanning(scan_system, min_period_us, data_format);
+    if (0 > r) {
+      throw joescan::ApiError("failed to start scanning", r);
+    }
+
+    threads = new std::thread[scan_heads.size()];
+    for (unsigned long i = 0; i < scan_heads.size(); i++) {
+      threads[i] = std::thread(receiver, scan_heads[i]);
+    }
+    
+
     jsScanHeadCapabilities cap;
     r = jsScanHeadGetCapabilities(scan_heads[0], &cap);
     if (0 > r) {
@@ -219,7 +462,7 @@ int main(int argc, char* argv[])
 
       std::cout << "Setting up checkboxes" << std::endl;
 
-      for (int j = 0; j < kHeadCount; j++) {
+      for (int j = 0; j < serial_numbers.size(); j++) {
         char buf[64];
         for (uint32_t i = 0; i < element_count; i++) {
           if (is_mode_camera) {
@@ -314,7 +557,21 @@ int main(int argc, char* argv[])
       glfwSwapBuffers(window);
     }
 
-    app.StopScanning();
+    r = jsScanSystemStopScanning(scan_system);
+    if (0 > r) {
+      throw joescan::ApiError("failed to stop scanning", r);
+    }
+
+    for (unsigned long i = 0; i < scan_heads.size(); i++) {
+      threads[i].join();
+    }
+    delete[] threads;
+    threads = nullptr;
+
+    r = jsScanSystemDisconnect(scan_system);
+    if (0 > r) {
+      throw joescan::ApiError("failed to disconnect from scan heads", r);
+    }
 
   } catch (joescan::ApiError &e) {
     std::cout << "ERROR: " << e.what() << std::endl;
