@@ -10,6 +10,7 @@
 #include "joescan_pinchot.h"
 #include "jsScanApplication.hpp"
 #include <vector>
+#include <queue>
 #include <iostream>
 #include <fstream>
 #include <mutex>
@@ -34,51 +35,7 @@
 #endif
 
 static std::mutex lock;
-static std::vector<jsProfile> master_profiles;
-
-#if 0
-#include "json.hpp"
-
-static void apply_alignment_json(jsScanHead &scan_head)
-{
-  std::string file_name = std::to_string(serial_number) + ".json";
-  std::ifstream fstream(file_name);
-
-  try {
-    using nlohmann::json;
-
-    std::stringstream ss;
-    ss << fstream.rdbuf();
-    auto j = json::parse(ss.str());
-
-    int32_t orientation = j["Orientation"];
-    bool is_cable_downstream = (0 == orientation) ? false : true;
-
-    for (auto& e : j["Alignment"]) {
-      std::cout << e["Laser"] << std::endl;
-      int32_t laser_id = e["Laser"]["Id"];
-      double roll = e["Laser"]["RollDeg"];
-      double shift_x = e["Laser"]["ShiftX"];
-      double shift_y = e["Laser"]["ShiftY"];
-      std::cout << id << std::endl;
-      std::cout << roll << std::endl;
-      std::cout << shift_x << std::endl;
-      std::cout << shift_y << std::endl;
-
-      r = jsScanHeadSetAlignmentLaser(scan_head,
-                                      (jsLaser)laser_id,
-                                      roll,
-                                      shift_x,
-                                      shift_y);
-      if (0 > r) {
-        throw std::runtime_error("failed to set alignment");
-      }
-    }
-  } catch (std::exception& e) {
-    // TODO: handle JSON exception
-  }
-}
-#endif
+static std::queue<jsProfile> master_profiles;
 
 static void glfw_error_callback(int error, const char* description)
 {
@@ -112,7 +69,7 @@ static void receiver(jsScanHead scan_head)
       {
         std::lock_guard<std::mutex> guard(lock);
         for (int j = 0; j < r; j++) {
-          master_profiles.push_back(profiles[j]);
+          master_profiles.push(profiles[j]);
         }
       }
     }
@@ -292,7 +249,6 @@ void initialize_scan_heads(jsScanSystem &scan_system,
 }
 
 
-
 int main(int argc, char* argv[])
 {
   jsScanSystem scan_system;
@@ -300,12 +256,12 @@ int main(int argc, char* argv[])
   std::thread *threads = nullptr;
 
   const int kMaxElementCount = 6;
-  const int kHeadCount = 100;
-  double x_data[kHeadCount][kMaxElementCount][JS_PROFILE_DATA_LEN];
-  double y_data[kHeadCount][kMaxElementCount][JS_PROFILE_DATA_LEN];
-  int data_length[kHeadCount][kMaxElementCount] = { 0 };
-  int laser_on_time_us[kHeadCount][kMaxElementCount];
-  bool is_element_enabled[kHeadCount][kMaxElementCount];
+  const int kHeadCount = 10;
+  double x_data[kMaxElementCount][JS_PROFILE_DATA_LEN];
+  double y_data[kMaxElementCount][JS_PROFILE_DATA_LEN];
+  int data_length[kMaxElementCount] = { 0 };
+  int laser_on_time_us[kMaxElementCount];
+  bool is_element_enabled[kHeadCount];
   bool is_mode_camera = false;
   GLFWwindow* window = nullptr;
   int32_t r = 0;
@@ -316,17 +272,13 @@ int main(int argc, char* argv[])
   }
 
   for (int j = 0; j < serial_numbers.size(); j++){
-    for (int i = 0; i < kMaxElementCount; ++i) {
-      is_element_enabled[j][i] = true;
-    }
+    is_element_enabled[j] = true;
   }
 
-  if (2 != argc) {
+  if (2 > argc) {
     std::cout << "Usage: " << argv[0] << " SERIAL" << std::endl;
     return 1;
   }
-
-  std::cout << "Created variables for app" << std::endl;
 
   try {
     scan_system = jsScanSystemCreate(JS_UNITS_INCHES);
@@ -359,19 +311,17 @@ int main(int argc, char* argv[])
     if (0 >= min_period_us) {
       throw joescan::ApiError("failed to read min scan period", min_period_us);
     }
-    std::cout << "min scan period is " << min_period_us << " us" << std::endl;
 
-    std::cout << "start scanning" << std::endl;
     jsDataFormat data_format = JS_DATA_FORMAT_XY_BRIGHTNESS_FULL;
     r = jsScanSystemStartScanning(scan_system, min_period_us, data_format);
     if (0 > r) {
       throw joescan::ApiError("failed to start scanning", r);
     }
 
-    threads = new std::thread[scan_heads.size()];
-    for (unsigned long i = 0; i < scan_heads.size(); i++) {
-      threads[i] = std::thread(receiver, scan_heads[i]);
-    }
+    // threads = new std::thread[scan_heads.size()];
+    // for (unsigned long i = 0; i < scan_heads.size(); i++) {
+    //   threads[i] = std::thread(receiver, scan_heads[i]);
+    // }
     
 
     jsScanHeadCapabilities cap;
@@ -384,8 +334,6 @@ int main(int argc, char* argv[])
     uint32_t element_count = (is_mode_camera) ?
                              cap.num_cameras :
                              cap.num_lasers;
-
-    std::cout << "Setting up glfw" << std::endl;
 
     // Setup window
     glfwSetErrorCallback(glfw_error_callback);
@@ -412,8 +360,6 @@ int main(int argc, char* argv[])
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1); // Enable vsync
 
-    std::cout << "glfw setup completed, setting up imgui" << std::endl;
-
     // Setup Dear ImGui context
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -430,7 +376,6 @@ int main(int argc, char* argv[])
     // Our state
     ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
 
-    std::cout << "Entering main loop" << std::endl;
     // Main loop
     while (!glfwWindowShouldClose(window)) {
       if (!glfwGetWindowAttrib(window, GLFW_VISIBLE)) {
@@ -460,20 +405,11 @@ int main(int argc, char* argv[])
                    &open,
                    ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoResize);
 
-      std::cout << "Setting up checkboxes" << std::endl;
-
       for (int j = 0; j < serial_numbers.size(); j++) {
         char buf[64];
-        for (uint32_t i = 0; i < element_count; i++) {
-          if (is_mode_camera) {
-            sprintf(buf, "Camera %d", i + 1);
-          } else {
-            sprintf(buf, "Laser %d]", i + 1);
-          }
-
-          ImGui::Checkbox(buf, &is_element_enabled[j][i]);
-          ImGui::SameLine();
-        }
+        sprintf(buf, "Scan Head %d", serial_numbers[j]);
+        ImGui::Checkbox(buf, &is_element_enabled[j]);
+        ImGui::SameLine();
       }
 
       ImGui::Text("Encoder = %lu", (int64_t) profile.encoder_values[0]);
@@ -489,9 +425,7 @@ int main(int argc, char* argv[])
 
       ImPlot::SetupAxesLimits(-50.0, 50.0, -50.0, 50.0);
       ImPlot::SetupFinish();
-      std::cout << "Setup plot" << std::endl;
-      std::cout << "Getting profiles" << std::endl;
-      for (int c = 0; c < kHeadCount; c++) {
+      for (int c = 0; c < serial_numbers.size(); c++) {
 
         r = jsScanHeadWaitUntilProfilesAvailable(scan_heads[c], 1, 10000);
         if (0 > r) {
@@ -510,13 +444,13 @@ int main(int argc, char* argv[])
                         ((uint32_t) profile.camera) - 1 :
                         ((uint32_t) profile.laser) - 1;
 
-          data_length[c][idx] = profile.data_len;
-          laser_on_time_us[c][idx] = profile.laser_on_time_us;
+          data_length[idx] = profile.data_len;
+          laser_on_time_us[idx] = profile.laser_on_time_us;
 
           // Worst case, we redraw laser1 data
           for (uint32_t n = 0; n < profile.data_len; n++) {
-            x_data[c][idx][n] = profile.data[n].x / 1000.0;
-            y_data[c][idx][n] = profile.data[n].y / 1000.0;
+            x_data[idx][n] = profile.data[n].x / 1000.0;
+            y_data[idx][n] = profile.data[n].y / 1000.0;
           }
         }
 
@@ -534,8 +468,8 @@ int main(int argc, char* argv[])
             sprintf(legend, "Laser %d [%duS]", i + 1, laser_on_time_us[i]);
           }
 
-          if (is_element_enabled[i]) {
-            ImPlot::PlotScatter(legend, x_data[c][i], y_data[c][i], data_length[c][i]);
+          if (is_element_enabled[c]) {
+            ImPlot::PlotScatter(legend, x_data[i], y_data[i], data_length[i]);
           }
         }
       }
