@@ -267,6 +267,7 @@ int main(int argc, char* argv[])
   std::vector<jsScanHead> scan_heads;
   std::thread *threads = nullptr;
 
+  ImVec4 colors[kMaxHeadCount];
   double x_data[JS_PROFILE_DATA_LEN];
   double y_data[JS_PROFILE_DATA_LEN];
   int data_length = 0;
@@ -274,12 +275,21 @@ int main(int argc, char* argv[])
   bool is_element_enabled[kMaxHeadCount];
   GLFWwindow* window = nullptr;
   int32_t r = 0;
-  
+
   std::vector<uint32_t> serial_numbers;
   for (int i = 1; i < argc; i++) {
     serial_numbers.emplace_back(strtoul(argv[i], NULL, 0));
   }
 
+  float color_inc = pow(2, 24) / (8);
+  std::cout << "color incramenter: " << color_inc << std::endl;
+  for (int c = 0; c < serial_numbers.size(); c++)
+  {
+      uint32_t cur_color = color_inc * (c + 1);
+      ImVec4 cur_color_vec = ImVec4((cur_color >> 16) & 0xFF, (cur_color >> 8) & 0xFF, cur_color & 0xFF, 1.0);
+      colors[c] = cur_color_vec;
+  }
+  
   for (int j = 0; j < serial_numbers.size(); j++){
     is_element_enabled[j] = true;
   }
@@ -471,9 +481,9 @@ int main(int argc, char* argv[])
           char legend[32];
           ImPlot::SetNextMarkerStyle(ImPlotMarker_Square,
                                     1,
-                                    ImPlot::GetColormapColor(j),
+                                    ImVec4((colors[c].x - (j * 40)) / 255.0, (colors[c].y + (j * 60)) / 255.0, (colors[c].z) / 255.0, 1.0),
                                     IMPLOT_AUTO,
-                                    ImPlot::GetColormapColor(j));
+                                    ImVec4((colors[c].x - (j * 40)) / 255.0, (colors[c].y + (j * 60)) / 255.0, (colors[c].z) / 255.0, 1.0));
           if (is_mode_camera) {
             sprintf(legend, "Camera %d##%d", profile.camera, c);
           } else {
