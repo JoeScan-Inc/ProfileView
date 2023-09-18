@@ -24,6 +24,12 @@
 #endif
 #include <GLFW/glfw3.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
+
 #include <string>
 #include <sstream>
 
@@ -34,15 +40,18 @@
 #pragma comment(lib, "legacy_stdio_definitions")
 #endif
 
-static std::mutex lock;
-static std::queue<jsProfile> master_profiles;
+bool is_mode_camera = false;
+const int kMaxHeadCount = 10;
+const int kMaxElementCount = 6;
+static std::mutex master_locks[kMaxHeadCount];
+static std::queue<jsProfile> master_profiles[kMaxHeadCount][kMaxElementCount];
 
 static void glfw_error_callback(int error, const char* description)
 {
   fprintf(stderr, "Glfw Error %d: %s\n", error, description);
 }
 
-static void receiver(jsScanHead scan_head)
+static void receiver(jsScanHead scan_head, std::queue<jsProfile> head_profiles[], std::mutex &lock)
 {
   const int max_profiles = 100;
   jsProfile *profiles = nullptr;
@@ -69,7 +78,10 @@ static void receiver(jsScanHead scan_head)
       {
         std::lock_guard<std::mutex> guard(lock);
         for (int j = 0; j < r; j++) {
-          master_profiles.push(profiles[j]);
+          uint32_t idx = (is_mode_camera) ?
+                        ((uint32_t) profiles[j].camera) - 1 :
+                        ((uint32_t) profiles[j].laser) - 1;
+          head_profiles[idx].push(profiles[j]);
         }
       }
     }
@@ -255,14 +267,11 @@ int main(int argc, char* argv[])
   std::vector<jsScanHead> scan_heads;
   std::thread *threads = nullptr;
 
-  const int kMaxElementCount = 6;
-  const int kHeadCount = 10;
-  double x_data[kMaxElementCount][JS_PROFILE_DATA_LEN];
-  double y_data[kMaxElementCount][JS_PROFILE_DATA_LEN];
-  int data_length[kMaxElementCount] = { 0 };
-  int laser_on_time_us[kMaxElementCount];
-  bool is_element_enabled[kHeadCount];
-  bool is_mode_camera = false;
+  double x_data[JS_PROFILE_DATA_LEN];
+  double y_data[JS_PROFILE_DATA_LEN];
+  int data_length = 0;
+  int laser_on_time_us = 0;
+  bool is_element_enabled[kMaxHeadCount];
   GLFWwindow* window = nullptr;
   int32_t r = 0;
   
@@ -288,7 +297,11 @@ int main(int argc, char* argv[])
     jsProfile profile;
 
     initialize_scan_heads(scan_system, scan_heads, serial_numbers);
+    for (int k = 0; k < serial_numbers.size(); k++) {
+      std::cout << "serial number: " << serial_numbers[k] << " id: " << scan_heads[k] << std::endl;
+    }
 
+    std::cout << "connecting to scan heads..." << std::endl;
     r = jsScanSystemConnect(scan_system, 10);
     if (0 > r) {
       throw joescan::ApiError("failed to connect to scan heads", r);
@@ -318,10 +331,11 @@ int main(int argc, char* argv[])
       throw joescan::ApiError("failed to start scanning", r);
     }
 
-    // threads = new std::thread[scan_heads.size()];
-    // for (unsigned long i = 0; i < scan_heads.size(); i++) {
-    //   threads[i] = std::thread(receiver, scan_heads[i]);
-    // }
+    std::cout << "Threads are starting" << std::endl;
+    threads = new std::thread[scan_heads.size()];
+    for (unsigned long i = 0; i < scan_heads.size(); i++) {
+      threads[i] = std::thread(receiver, scan_heads[i], std::ref(master_profiles[i]), std::ref(master_locks[i]));
+    }
     
 
     jsScanHeadCapabilities cap;
@@ -377,6 +391,7 @@ int main(int argc, char* argv[])
     ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
 
     // Main loop
+    std::cout << "entering main loop" << std::endl;
     while (!glfwWindowShouldClose(window)) {
       if (!glfwGetWindowAttrib(window, GLFW_VISIBLE)) {
         continue;
@@ -425,51 +440,48 @@ int main(int argc, char* argv[])
 
       ImPlot::SetupAxesLimits(-50.0, 50.0, -50.0, 50.0);
       ImPlot::SetupFinish();
-      for (int c = 0; c < serial_numbers.size(); c++) {
-
-        r = jsScanHeadWaitUntilProfilesAvailable(scan_heads[c], 1, 10000);
-        if (0 > r) {
-          throw joescan::ApiError(
-            "jsScanHeadWaitUntilProfilesAvailable failed", r);
-        }
-
-        uint32_t profiles_available = r;
-        for (uint32_t k = 0; k < profiles_available; k++) {
-          r = jsScanHeadGetProfiles(scan_heads[c], &profile, 1);
-          if (0 > r) {
-            throw joescan::ApiError("jsScanHeadGetProfiles failed", r);
+      for (int c = 0; c < serial_numbers.size(); c++)
+      {
+        std::mutex *lock = &master_locks[c];
+        std::queue<jsProfile> *profiles = master_profiles[c];
+        for (int j = 0; j < element_count; j++)
+        {
+          {
+            std::lock_guard<std::mutex> guard(*lock);
+            if (profiles[j].size() > 0) {
+              profile = profiles[j].front();
+              profiles[j].pop();
+            } else {
+#ifdef _WIN32
+              Sleep(500);
+#else
+              usleep(500);
+#endif
+            }
           }
-
-          uint32_t idx = (is_mode_camera) ?
-                        ((uint32_t) profile.camera) - 1 :
-                        ((uint32_t) profile.laser) - 1;
-
-          data_length[idx] = profile.data_len;
-          laser_on_time_us[idx] = profile.laser_on_time_us;
+          data_length = profile.data_len;
+          laser_on_time_us = profile.laser_on_time_us;
 
           // Worst case, we redraw laser1 data
           for (uint32_t n = 0; n < profile.data_len; n++) {
-            x_data[idx][n] = profile.data[n].x / 1000.0;
-            y_data[idx][n] = profile.data[n].y / 1000.0;
+            x_data[n] = profile.data[n].x / 1000.0;
+            y_data[n] = profile.data[n].y / 1000.0;
           }
-        }
 
-        char legend[32];
-        for (uint32_t i = 0; i < element_count; i++)
-        {
+          char legend[32];
           ImPlot::SetNextMarkerStyle(ImPlotMarker_Square,
                                     1,
-                                    ImPlot::GetColormapColor(i),
+                                    ImPlot::GetColormapColor(j),
                                     IMPLOT_AUTO,
-                                    ImPlot::GetColormapColor(i));
+                                    ImPlot::GetColormapColor(j));
           if (is_mode_camera) {
-            sprintf(legend, "Camera %d [%duS]", i + 1, laser_on_time_us[i]);
+            sprintf(legend, "Camera %d##%d", profile.camera, c);
           } else {
-            sprintf(legend, "Laser %d [%duS]", i + 1, laser_on_time_us[i]);
+            sprintf(legend, "Laser %d##%d", profile.laser, c);
           }
 
-          if (is_element_enabled[c]) {
-            ImPlot::PlotScatter(legend, x_data[i], y_data[i], data_length[i]);
+          if (is_element_enabled[profile.scan_head_id]) {
+            ImPlot::PlotScatter(legend, x_data, y_data, data_length);
           }
         }
       }
