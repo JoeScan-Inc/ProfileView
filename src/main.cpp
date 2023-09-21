@@ -278,11 +278,12 @@ void initialize_phase_table(jsScanSystem &scan_system,
 int main(int argc, char* argv[])
 {
   const int kMaxElementCount = 6;
+  const int kMaxHeadCount = 100;
   double x_data[kMaxElementCount][JS_PROFILE_DATA_LEN];
   double y_data[kMaxElementCount][JS_PROFILE_DATA_LEN];
   int data_length[kMaxElementCount] = { 0 };
   int laser_on_time_us[kMaxElementCount];
-  bool is_element_enabled[kMaxElementCount];
+  bool is_element_enabled[kMaxHeadCount];
   bool is_mode_camera = false;
   GLFWwindow* window = nullptr;
   int64_t encoder = 0;
@@ -302,8 +303,8 @@ int main(int argc, char* argv[])
     serial_numbers.emplace_back(strtoul(argv[i], NULL, 0));
   }
 
-  for (int i = 0; i < kMaxElementCount; ++i) {
-    is_element_enabled[i] = true;
+  for (int j = 0; j < kMaxHeadCount; ++j) {
+    is_element_enabled[j] = true;
   }
 
   try {
@@ -432,12 +433,8 @@ int main(int argc, char* argv[])
                    ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoResize);
 
       char buf[64];
-      for (uint32_t i = 0; i < element_count; i++) {
-        if (is_mode_camera) {
-          sprintf(buf, "Camera %d", i + 1);
-        } else {
-          sprintf(buf, "Laser %d]", i + 1);
-        }
+      for (uint32_t i = 0; i < serial_numbers.size(); i++) {
+        sprintf(buf, "Head %d", i + 1);
 
         ImGui::Checkbox(buf, &is_element_enabled[i]);
         ImGui::SameLine();
@@ -488,26 +485,23 @@ int main(int argc, char* argv[])
               x_data[idx][n] = profiles[m].data[n].x * 0.001;
               y_data[idx][n] = profiles[m].data[n].y * 0.001;
             }
+
+            char legend[32];
+            ImPlot::SetNextMarkerStyle(ImPlotMarker_Square,
+                                      1,
+                                      ImPlot::GetColormapColor(idx),
+                                      IMPLOT_AUTO,
+                                      ImPlot::GetColormapColor(idx));
+            if (is_mode_camera) {
+              sprintf(legend, "Camera %d [%duS]##%d", idx + 1, laser_on_time_us[idx], profiles[m].scan_head_id);
+            } else {
+              sprintf(legend, "Laser %d [%duS]##%d", idx + 1, laser_on_time_us[idx], profiles[m].scan_head_id);
+            }
+
+            if (is_element_enabled[profiles[m].scan_head_id]) {
+              ImPlot::PlotScatter(legend, x_data[idx], y_data[idx], data_length[idx]);
+            }
           }
-        }
-      }
-
-      char legend[32];
-      for (uint32_t i = 0; i < element_count; i++)
-      {
-        ImPlot::SetNextMarkerStyle(ImPlotMarker_Square,
-                                   1,
-                                   ImPlot::GetColormapColor(i),
-                                   IMPLOT_AUTO,
-                                   ImPlot::GetColormapColor(i));
-        if (is_mode_camera) {
-          sprintf(legend, "Camera %d [%duS]", i + 1, laser_on_time_us[i]);
-        } else {
-          sprintf(legend, "Laser %d [%duS]", i + 1, laser_on_time_us[i]);
-        }
-
-        if (is_element_enabled[i]) {
-          ImPlot::PlotScatter(legend, x_data[i], y_data[i], data_length[i]);
         }
       }
 
