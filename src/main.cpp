@@ -481,9 +481,9 @@ int main(int argc, char* argv[])
           char legend[32];
           ImPlot::SetNextMarkerStyle(ImPlotMarker_Square,
                                     1,
-                                    ImVec4((colors[c].x - (j * 40)) / 255.0, (colors[c].y + (j * 60)) / 255.0, (colors[c].z) / 255.0, 1.0),
+                                    ImPlot::GetColormapColor(j),
                                     IMPLOT_AUTO,
-                                    ImVec4((colors[c].x - (j * 40)) / 255.0, (colors[c].y + (j * 60)) / 255.0, (colors[c].z) / 255.0, 1.0));
+                                    ImPlot::GetColormapColor(j));
           if (is_mode_camera) {
             sprintf(legend, "Camera %d##%d", profile.camera, c);
           } else {
