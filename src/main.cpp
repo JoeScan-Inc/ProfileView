@@ -402,7 +402,9 @@ int main(int argc, char* argv[])
 
     // Our state
     ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
-
+    int last_failed_sn = 0;
+    int last_sn = 0;
+    int valid_frames = 0;
     // Main loop
     while (!glfwWindowShouldClose(window)) {
       if (!glfwGetWindowAttrib(window, GLFW_VISIBLE)) {
@@ -465,11 +467,16 @@ int main(int argc, char* argv[])
           throw ApiError("failed to read frame", r);
         } if (0 == r) {
           std::cout << "No frame?" << std::endl;
+          last_failed_sn = last_sn;
         } else {
+          valid_frames++;
+          std::cout << "There have been " << valid_frames << " received so far" << std::endl;
           for (uint32_t m = 0; m < profiles_per_frame; m++) {
-            if (!jsRawProfileIsValid(profiles[m])) {
+            if (!jsProfileIsValid(profiles[m])) {
+              std::cout << "Invalid profile" << std::endl;
               continue;
             }
+            last_sn = profiles[m].sequence_number;
 
             encoder = profiles[m].encoder_values[0];
 
