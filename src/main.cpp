@@ -373,6 +373,7 @@ static void receiver(jsScanSystem scan_system)
 
 int main(int argc, char* argv[])
 {
+  float *** colors;
   const int kMaxElementCount = 8;
   const int kMaxHeadCount = 100;
   double x_data[kMaxElementCount][JS_PROFILE_DATA_LEN];
@@ -398,6 +399,24 @@ int main(int argc, char* argv[])
   // Grab the serial number(s) passed in through the command line.
   for (int i = 1; i < argc; i++) {
     serial_numbers.emplace_back(strtoul(argv[i], NULL, 0));
+  }
+
+  colors = new float**[serial_numbers.size()];
+  for (int j = 0; j < serial_numbers.size(); j++){
+    colors[j] = new float*[kMaxElementCount];
+    for (int i = 0; i < kMaxElementCount; i++) {
+      colors[j][i] = new float[4];
+      colors[j][i][3] = 1.0f;
+      if (i % 2 == 0) {
+        colors[j][i][0] = 0.9882;
+        colors[j][i][1] = 0.5647;
+        colors[j][i][2] = 0.0117;
+      } else {
+        colors[j][i][0] = 0.0117;
+        colors[j][i][1] = 0.5647;
+        colors[j][i][2] = 0.9882;
+      }
+    }
   }
 
   for (int j = 0; j < kMaxHeadCount; ++j) {
@@ -533,16 +552,26 @@ int main(int argc, char* argv[])
       ImGui::Begin("ScanData",
                    &open,
                    ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoResize);
-
-      char buf[64];
-      for (uint32_t i = 0; i < serial_numbers.size(); i++) {
-        sprintf(buf, "Head %d", i + 1);
-
-        ImGui::Checkbox(buf, &is_element_enabled[i]);
-        ImGui::SameLine();
+      
+      ImGui::Columns(2);
+      ImGui::SetColumnWidth(0, 200);
+      for (int j = 0; j < serial_numbers.size(); j++) {
+        char buf[64];
+        sprintf(buf, "Scan Head %d", serial_numbers[j]);
+        ImGui::Checkbox(buf, &is_element_enabled[j]);
+        ImGui::Indent();
+        for (int i = 0; i < element_count; i++) {
+          char element_buf[64];
+          char invisible_buf[64];
+          sprintf(element_buf, "Element %d", ((j*2) + i+1));
+          sprintf(invisible_buf, "##%d", ((j*2) + i+1));
+          ImGui::ColorEdit4(element_buf, colors[j][i], ImGuiColorEditFlags_NoInputs);
+        }
+        ImGui::Unindent();
       }
 
       ImGui::Text("Encoder = %lu", encoder);
+      ImGui::NextColumn();
 
       auto is_plot_sucess = ImPlot::BeginPlot("Profile Plot",
                                               "X [inches]",
@@ -582,15 +611,16 @@ int main(int argc, char* argv[])
           }
 
           char legend[32];
+          int head = profiles[j].scan_head_id;
           ImPlot::SetNextMarkerStyle(ImPlotMarker_Square,
                                     1,
-                                    ImPlot::GetColormapColor(idx),
+                                    ImVec4(colors[head][idx][0], colors[head][idx][1], colors[head][idx][2], colors[head][idx][3]),
                                     IMPLOT_AUTO,
-                                    ImPlot::GetColormapColor(idx));
+                                    ImVec4(colors[head][idx][0], colors[head][idx][1], colors[head][idx][2], colors[head][idx][3]));
           if (is_mode_camera) {
-            sprintf(legend, "Camera %d [%duS]##%d", idx + 1, laser_on_time_us[idx], profiles[j].scan_head_id);
+            sprintf(legend, "Camera %d##%d", (2*head) + (idx+1), 1);
           } else {
-            sprintf(legend, "Laser %d [%duS]##%d", idx + 1, laser_on_time_us[idx], profiles[j].scan_head_id);
+            sprintf(legend, "Laser %d##%d", (2*head) + (idx+1), 1);
           }
 
           if (is_element_enabled[profiles[j].scan_head_id]) {
@@ -625,6 +655,15 @@ int main(int argc, char* argv[])
     jsScanSystemStopScanning(scan_system);
     jsScanSystemDisconnect(scan_system);
     jsScanSystemFree(scan_system);
+
+    for (int i = 0; i < serial_numbers.size(); i++) {
+      for (int j = 0; j < kMaxElementCount; j++) {
+        delete[] colors[i][j];
+      }
+      delete[] colors[i];
+    }
+    delete[] colors;
+    std::cout << "Cleaned up colors" << std::endl;
 
     std::cout << "Frames: " << _frame_count << " Profiles: " << _profile_count
               << " Invalid: " << _invalid_count << std::endl;
