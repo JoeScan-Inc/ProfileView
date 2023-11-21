@@ -82,7 +82,7 @@ static void glfw_error_callback(int error, const char* description)
 
 int main(int argc, char* argv[])
 {
-  const int kMaxElementCount = 6;
+  const int kMaxElementCount = 8;
   double x_data[kMaxElementCount][JS_PROFILE_DATA_LEN];
   double y_data[kMaxElementCount][JS_PROFILE_DATA_LEN];
   int data_length[kMaxElementCount] = { 0 };
