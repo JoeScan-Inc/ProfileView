@@ -58,7 +58,7 @@ BOOL WINAPI signal_callback_handler(DWORD signal) {
     return TRUE;
   }
 
-  LOG_INFO << "Received unhandled signal " << signal;
+  std::cout << "Received unhandled signal " << signal << std::endl;
 
   return FALSE;
 }
@@ -340,11 +340,11 @@ int main(int argc, char* argv[])
   }
 
 #if defined(_WIN32)
-  if (!SetConsoleCtrlHandler(console_handler, TRUE)) {
+  if (!SetConsoleCtrlHandler(signal_callback_handler, TRUE)) {
    std::cout << "Could not set control handler" << std::endl;
     return 1;
   }
-  LOG_INFO << "Registered console ctrl handler";
+  std::cout << "Registered console ctrl handler" << std::endl;
 #else
   signal(SIGTERM, signal_callback_handler);
   std::cout << "Registered SIGTERM signal handler" << std::endl;
