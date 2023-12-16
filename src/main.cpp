@@ -8,6 +8,7 @@
 #include "imgui.h"
 #include "implot.h"
 #include "joescan_pinchot.h"
+#include <atomic>
 #include <vector>
 #include <iostream>
 #include <fstream>
@@ -18,18 +19,13 @@
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl2.h"
 #include <stdio.h>
-#ifdef __APPLE__
+#if defined(__APPLE__)
 #define GL_SILENCE_DEPRECATION
 #endif
 #include <GLFW/glfw3.h>
 
 #include <string>
 #include <sstream>
-
-#ifdef _WIN32
-#include "Windows.h"
-#include "processthreadsapi.h"
-#endif
 
 static std::atomic<bool> _is_scanning(false);
 static std::atomic<uint32_t> _frame_count(0);
@@ -38,14 +34,42 @@ static std::atomic<uint32_t> _invalid_count(0);
 static std::queue<jsProfile*> master_profiles;
 static std::mutex master_profiles_mutex;
 
+#if defined(_WIN32)
+#include "Windows.h"
+#include "processthreadsapi.h"
+
 // [Win32] Our example includes a copy of glfw3.lib pre-compiled with VS2010 to
 // maximize ease of testing and compatibility with old VS compilers. To link
 // with VS2010-era libraries, VS2015+ requires linking with 
 // legacy_stdio_definitions.lib, which we do using this pragma. Your own
 // project should not be affected, as you are likely to link with a newer
 // binary of GLFW that is adequate for your version of Visual Studio.
-#if defined(_MSC_VER) && (_MSC_VER >= 1900) && !defined(IMGUI_DISABLE_WIN32_FUNCTIONS)
+#if defined(_MSC_VER) && \
+    (_MSC_VER >= 1900) && \
+    !defined(IMGUI_DISABLE_WIN32_FUNCTIONS)
 #pragma comment(lib, "legacy_stdio_definitions")
+#endif
+
+BOOL WINAPI signal_callback_handler(DWORD signal) {
+
+  if ((CTRL_C_EVENT == signal) || (CTRL_BREAK_EVENT == signal)) {
+    std::cout << "Received signal " << signal << std::endl;
+    _is_scanning = false;
+    return TRUE;
+  }
+
+  LOG_INFO << "Received unhandled signal " << signal;
+
+  return FALSE;
+}
+#else
+#include <csignal>
+
+void signal_callback_handler(int signum)
+{
+  std::cout << "Received signal " << signum << std::endl;
+  _is_scanning = false;
+}
 #endif
 
 class ApiError : public std::runtime_error {
@@ -290,100 +314,19 @@ void initialize_phase_table(jsScanSystem &scan_system,
   }
 }
 
-static void receiver(jsScanSystem scan_system)
-{
-  // For applications with heavy CPU load, it is advised to boost the priority
-  // of the thread reading out the frame data. If the thread reading out the
-  // scan data falls behind, data will be dropped, causing problems later on
-  // when trying to analyze what was scanned.
-#ifdef _WIN32
-  SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
-#endif
-  jsProfile* profiles = nullptr;
-
-  try {
-    int32_t r = jsScanSystemGetProfilesPerFrame(scan_system);
-    if (0 >= r) {
-      throw ApiError("failed to read frame size", r);
-    }
-
-    uint32_t profiles_per_frame = uint32_t(r);
-
-    while (_is_scanning) {
-      r = jsScanSystemWaitUntilFrameAvailable(scan_system, 1000000);
-      if (0 == r) {
-        continue;
-      }
-      else if (0 > r) {
-        throw ApiError("failed to wait for frame", r);
-      }
-
-      profiles = new jsProfile[uint32_t(profiles_per_frame)];
-      r = jsScanSystemGetFrame(scan_system, profiles);
-      if (0 >= r) {
-        throw ApiError("failed to read frame", r);
-      }
-
-      _profile_count += r;
-      _frame_count += 1;
-      uint32_t valid_count = 0;
-      for (uint32_t n = 0; n < profiles_per_frame; n++) {
-        if (jsProfileIsValid(profiles[n])) {
-          valid_count++;
-        }
-        else {
-          _invalid_count++;
-          std::cout << "Invalid: " << profiles[n].sequence_number << " "
-            << profiles[n].scan_head_id;
-          if (JS_CAMERA_A == profiles[n].camera) {
-            std::cout << ".A.";
-          }
-          else {
-            std::cout << ".B.";
-          }
-          std::cout << profiles[n].laser << std::endl;
-        }
-      }
-      if (valid_count != profiles_per_frame) {
-        std::cout << "received " << valid_count << " of " << profiles_per_frame
-          << std::endl;
-      }
-      else {
-        master_profiles_mutex.lock();
-        master_profiles.push(profiles);
-        master_profiles_mutex.unlock();
-      }
-    }
-  }
-  catch (ApiError& e) {
-    std::cout << "ERROR: " << e.what() << std::endl;
-    const char* err_str = nullptr;
-    jsError err = e.return_code();
-    if (JS_ERROR_NONE != err) {
-      jsGetError(err, &err_str);
-      std::cout << "jsError (" << err << "): " << err_str << std::endl;
-    }
-  }
-
-  if (nullptr != profiles) {
-    delete[] profiles;
-  }
-}
-
-
 int main(int argc, char* argv[])
 {
-  float *** colors;
   const int kMaxElementCount = 8;
-  const int kMaxHeadCount = 100;
   double x_data[kMaxElementCount][JS_PROFILE_DATA_LEN];
   double y_data[kMaxElementCount][JS_PROFILE_DATA_LEN];
   int data_length[kMaxElementCount] = { 0 };
   int laser_on_time_us[kMaxElementCount];
-  bool is_element_enabled[kMaxHeadCount];
   bool is_mode_camera = false;
   GLFWwindow* window = nullptr;
-  int64_t encoder = 0;
+  jsProfile *profiles = nullptr;
+  // std::vector<bool> is a mess in C++...
+  bool *is_element_enabled = nullptr;
+  float ***colors = nullptr;
   int32_t r = 0;
 
   jsScanSystem scan_system;
@@ -396,31 +339,43 @@ int main(int argc, char* argv[])
     return 1;
   }
 
+#if defined(_WIN32)
+  if (!SetConsoleCtrlHandler(console_handler, TRUE)) {
+   std::cout << "Could not set control handler" << std::endl;
+    return 1;
+  }
+  LOG_INFO << "Registered console ctrl handler";
+#else
+  signal(SIGTERM, signal_callback_handler);
+  std::cout << "Registered SIGTERM signal handler" << std::endl;
+  signal(SIGINT, signal_callback_handler);
+  std::cout << "Registered SIGINT signal handler" << std::endl;
+#endif
+
   // Grab the serial number(s) passed in through the command line.
   for (int i = 1; i < argc; i++) {
     serial_numbers.emplace_back(strtoul(argv[i], NULL, 0));
   }
+  is_element_enabled = new bool[serial_numbers.size()];
+  std::fill_n(is_element_enabled, serial_numbers.size(), true);
 
   colors = new float**[serial_numbers.size()];
-  for (int j = 0; j < serial_numbers.size(); j++){
-    colors[j] = new float*[kMaxElementCount];
-    for (int i = 0; i < kMaxElementCount; i++) {
-      colors[j][i] = new float[4];
-      colors[j][i][3] = 1.0f;
-      if (i % 2 == 0) {
-        colors[j][i][0] = 0.9882;
-        colors[j][i][1] = 0.5647;
-        colors[j][i][2] = 0.0117;
+  for (int m = 0; m < serial_numbers.size(); m++) {
+    colors[m] = new float*[kMaxElementCount];
+    for (int n = 0; n < kMaxElementCount; n++) {
+      colors[m][n] = new float[4];
+      if (n % 2 == 0) {
+        colors[m][n][0] = 0.9882;
+        colors[m][n][1] = 0.5647;
+        colors[m][n][2] = 0.0117;
+        colors[m][n][3] = 1.0f;
       } else {
-        colors[j][i][0] = 0.0117;
-        colors[j][i][1] = 0.5647;
-        colors[j][i][2] = 0.9882;
+        colors[m][n][0] = 0.0117;
+        colors[m][n][1] = 0.5647;
+        colors[m][n][2] = 0.9882;
+        colors[m][n][3] = 1.0f;
       }
     }
-  }
-
-  for (int j = 0; j < kMaxHeadCount; ++j) {
-    is_element_enabled[j] = true;
   }
 
   try {
@@ -442,33 +397,10 @@ int main(int argc, char* argv[])
           std::cout << serial << " is NOT connected" << std::endl;
         }
       }
-      throw ApiError("failed to connect to all scan heads", 0);
+      throw ApiError("fgenitive englishailed to connect to all scan heads", 0);
     }
 
     initialize_phase_table(scan_system, scan_heads);
-
-    r = jsScanSystemGetProfilesPerFrame(scan_system);
-    if (0 >= r) {
-      throw ApiError("failed to read frame size", r);
-    }
-    uint32_t profiles_per_frame = uint32_t(r);
-
-    int32_t min_period_us = jsScanSystemGetMinScanPeriod(scan_system);
-    if (0 >= min_period_us) {
-      throw ApiError("failed to read min scan period", min_period_us);
-    }
-    std::cout << "min scan period is " << min_period_us << " us" << std::endl;
-
-    std::cout << "start scanning" << std::endl;
-    jsDataFormat data_format = JS_DATA_FORMAT_XY_BRIGHTNESS_FULL;
-    r = jsScanSystemStartFrameScanning(scan_system, min_period_us, data_format);
-    if (0 > r) {
-      throw ApiError("failed to start scanning", r);
-    }
-
-    jsProfile* profiles = nullptr;
-    _is_scanning = true;
-    thread = std::thread(receiver, scan_system);
 
     jsScanHeadCapabilities cap;
     r = jsScanHeadGetCapabilities(scan_heads[0], &cap);
@@ -481,10 +413,36 @@ int main(int argc, char* argv[])
                              cap.num_cameras :
                              cap.num_lasers;
 
+    r = jsScanSystemGetProfilesPerFrame(scan_system);
+    if (0 >= r) {
+      throw ApiError("failed to read frame size", r);
+    }
+    uint32_t profiles_per_frame = uint32_t(r);
+    profiles = new jsProfile[profiles_per_frame];
+
+    int32_t min_period_us = jsScanSystemGetMinScanPeriod(scan_system);
+    if (0 >= min_period_us) {
+      throw ApiError("failed to read min scan period", min_period_us);
+    }
+    std::cout << "min scan period is " << min_period_us << " us" << std::endl;
+    const uint32_t kMinScanPeriodUs = 100000;
+    if (min_period_us < kMinScanPeriodUs) {
+      min_period_us = kMinScanPeriodUs;
+    }
+
+    std::cout << "starting scan with " << min_period_us << " us scan period" 
+              << std::endl;
+    jsDataFormat data_format = JS_DATA_FORMAT_XY_BRIGHTNESS_FULL;
+    r = jsScanSystemStartFrameScanning(scan_system, min_period_us, data_format);
+    if (0 > r) {
+      throw ApiError("failed to start scanning", r);
+    }
+    _is_scanning = true;
+
     // Setup window
     glfwSetErrorCallback(glfw_error_callback);
     if (!glfwInit()) {
-      return 1;
+      throw std::runtime_error("glfwSetErrorCallback() failed");
     }
 
     auto monitor = glfwGetPrimaryMonitor();
@@ -493,13 +451,16 @@ int main(int argc, char* argv[])
     glfwWindowHint(GLFW_GREEN_BITS, mode->greenBits);
     glfwWindowHint(GLFW_BLUE_BITS, mode->blueBits);
     glfwWindowHint(GLFW_REFRESH_RATE, mode->refreshRate);
-    window = glfwCreateWindow(1920,
-                              1200,
-                              "ProfileView",
-                              NULL,
-                              NULL);
+    window = glfwCreateWindow(
+      1920,
+      1200,
+      "ProfileView",
+      NULL,
+      NULL
+    );
+
     if (nullptr == window) {
-      return 1;
+      throw std::runtime_error("glfwCreateWindow() failed");
     }
 
     //glfwMaximizeWindow(window);
@@ -525,7 +486,10 @@ int main(int argc, char* argv[])
     int last_sn = 0;
     int valid_frames = 0;
     // Main loop
-    while (!glfwWindowShouldClose(window)) {
+    while ((!glfwWindowShouldClose(window)) && _is_scanning) {
+      int64_t encoder;
+      uint32_t head;
+
       if (!glfwGetWindowAttrib(window, GLFW_VISIBLE)) {
         continue;
       }
@@ -549,23 +513,29 @@ int main(int argc, char* argv[])
 #endif
       ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
       bool open = true;
-      ImGui::Begin("ScanData",
-                   &open,
-                   ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoResize);
+      ImGui::Begin(
+        "ScanData",
+        &open,
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoResize
+      );
       
       ImGui::Columns(2);
       ImGui::SetColumnWidth(0, 200);
-      for (int j = 0; j < serial_numbers.size(); j++) {
+      for (int m = 0; m < serial_numbers.size(); m++) {
         char buf[64];
-        sprintf(buf, "Scan Head %d", serial_numbers[j]);
-        ImGui::Checkbox(buf, &is_element_enabled[j]);
+        sprintf(buf, "Scan Head %d", serial_numbers[m]);
+        ImGui::Checkbox(buf, &is_element_enabled[m]);
         ImGui::Indent();
-        for (int i = 0; i < element_count; i++) {
+        for (int n = 0; n < element_count; n++) {
           char element_buf[64];
           char invisible_buf[64];
-          sprintf(element_buf, "Element %d", ((j*2) + i+1));
-          sprintf(invisible_buf, "##%d", ((j*2) + i+1));
-          ImGui::ColorEdit4(element_buf, colors[j][i], ImGuiColorEditFlags_NoInputs);
+          sprintf(element_buf, "Element %d", ((m*2) + n+1));
+          sprintf(invisible_buf, "##%d", ((m*2) + n+1));
+          ImGui::ColorEdit4(
+            element_buf,
+            colors[m][n],
+            ImGuiColorEditFlags_NoInputs
+          );
         }
         ImGui::Unindent();
       }
@@ -573,11 +543,13 @@ int main(int argc, char* argv[])
       ImGui::Text("Encoder = %lu", encoder);
       ImGui::NextColumn();
 
-      auto is_plot_sucess = ImPlot::BeginPlot("Profile Plot",
-                                              "X [inches]",
-                                              "Y [inches]",
-                                              ImVec2(-1, -1),
-                                              ImPlotFlags_Equal);
+      auto is_plot_sucess = ImPlot::BeginPlot(
+        "Profile Plot",
+        "X [inches]",
+        "Y [inches]",
+        ImVec2(-1, -1),
+        ImPlotFlags_Equal
+      );
       if (!is_plot_sucess) {
         continue;
       }
@@ -585,49 +557,75 @@ int main(int argc, char* argv[])
       ImPlot::SetupAxesLimits(-50.0, 50.0, -50.0, 50.0);
       ImPlot::SetupFinish();
 
-      master_profiles_mutex.lock();
-      if (!master_profiles.empty()) {
-        profiles = master_profiles.front();
-        master_profiles.pop();
-        master_profiles_mutex.unlock();
 
-        for (int j = 0; j < profiles_per_frame; j++) {
-          if (!jsProfileIsValid(profiles[j])) {
-            std::cout << "Invalid profile" << std::endl;
-            continue;
-          }
+      r = jsScanSystemWaitUntilFrameAvailable(scan_system, 1000000);
+      if (0 == r) {
+        std::cout << "wait failed!" << std::endl;
+      } else if (0 > r) {
+        throw ApiError("failed to wait for frame", r);
+      }
 
-          encoder = profiles[j].encoder_values[0];
-          uint32_t idx = (is_mode_camera) ?
-                          ((uint32_t) profiles[j].camera) - 1 :
-                          ((uint32_t) profiles[j].laser) - 1;
+      for (uint32_t n = 0; n < profiles_per_frame; n++) {
+        jsProfileInit(&profiles[n]);
+      }
 
-          data_length[idx] = profiles[j].data_len;
-          laser_on_time_us[idx] = profiles[j].laser_on_time_us;
-          
-          for (uint32_t n = 0; n < profiles[j].data_len; n++) {
-            x_data[idx][n] = profiles[j].data[n].x * 0.001;
-            y_data[idx][n] = profiles[j].data[n].y * 0.001;
-          }
-
-          char legend[32];
-          int head = profiles[j].scan_head_id;
-          ImPlot::SetNextMarkerStyle(ImPlotMarker_Square,
-                                    1,
-                                    ImVec4(colors[head][idx][0], colors[head][idx][1], colors[head][idx][2], colors[head][idx][3]),
-                                    IMPLOT_AUTO,
-                                    ImVec4(colors[head][idx][0], colors[head][idx][1], colors[head][idx][2], colors[head][idx][3]));
-          if (is_mode_camera) {
-            sprintf(legend, "Camera %d##%d", (2*head) + (idx+1), 1);
-          } else {
-            sprintf(legend, "Laser %d##%d", (2*head) + (idx+1), 1);
-          }
-
-          if (is_element_enabled[profiles[j].scan_head_id]) {
-            ImPlot::PlotScatter(legend, x_data[idx], y_data[idx], data_length[idx]);
-          }
+      r = jsScanSystemGetFrame(scan_system, profiles);
+      if (0 == r) {
+        std::cout << "no frame? " << std::to_string(_frame_count) << std::endl;
+      } else if (0 > r) {
+        throw ApiError("failed to read frame", r);
+      } 
+      _frame_count++;
+      for (uint32_t n = 0; n < profiles_per_frame; n++) {
+        if (!jsProfileIsValid(profiles[n])) {
+          continue;
         }
-        delete[] profiles;
+
+        jsProfile *p = &profiles[n];
+        head = p->scan_head_id;
+        encoder = p->encoder_values[0];
+        uint32_t idx = (is_mode_camera) ?
+                       ((uint32_t) p->camera) - 1 :
+                       ((uint32_t) p->laser) - 1;
+
+        for (uint32_t i = 0; i < p->data_len; i++) {
+          x_data[idx][i] = p->data[i].x * 0.001;
+          y_data[idx][i] = p->data[i].y * 0.001;
+        }
+        data_length[idx] = p->data_len;
+        laser_on_time_us[idx] = p->laser_on_time_us;
+
+        ImPlot::SetNextMarkerStyle(
+          ImPlotMarker_Square,
+          1,
+          ImVec4(
+            colors[head][idx][0],
+            colors[head][idx][1],
+            colors[head][idx][2],
+            colors[head][idx][3]),
+          IMPLOT_AUTO,
+          ImVec4(
+            colors[head][idx][0],
+            colors[head][idx][1],
+            colors[head][idx][2],
+            colors[head][idx][3])
+        );
+
+        char legend[32];
+        if (is_mode_camera) {
+          sprintf(legend, "Camera %d##%d", (2*head) + (idx+1), 1);
+        } else {
+          sprintf(legend, "Laser %d##%d", (2*head) + (idx+1), 1);
+        }
+
+        if (is_element_enabled[head]) {
+          ImPlot::PlotScatter(
+            legend,
+            x_data[idx],
+            y_data[idx],
+            data_length[idx]
+          );
+        }
       }
 
       ImPlot::EndPlot();
@@ -637,37 +635,17 @@ int main(int argc, char* argv[])
       int display_w, display_h;
       glfwGetFramebufferSize(window, &display_w, &display_h);
       glViewport(0, 0, display_w, display_h);
-      glClearColor(clear_color.x * clear_color.w,
-                   clear_color.y * clear_color.w,
-                   clear_color.z * clear_color.w,
-                   clear_color.w);
+      glClearColor(
+        (clear_color.x * clear_color.w),
+        (clear_color.y * clear_color.w),
+        (clear_color.z * clear_color.w),
+        clear_color.w
+      );
       glClear(GL_COLOR_BUFFER_BIT);
       ImGui_ImplOpenGL2_RenderDrawData(ImGui::GetDrawData());
       glfwMakeContextCurrent(window);
       glfwSwapBuffers(window);
     }
-    
-    _is_scanning = false;
-    if (thread.joinable()) {
-      thread.join();
-    }
-
-    jsScanSystemStopScanning(scan_system);
-    jsScanSystemDisconnect(scan_system);
-    jsScanSystemFree(scan_system);
-
-    for (int i = 0; i < serial_numbers.size(); i++) {
-      for (int j = 0; j < kMaxElementCount; j++) {
-        delete[] colors[i][j];
-      }
-      delete[] colors[i];
-    }
-    delete[] colors;
-    std::cout << "Cleaned up colors" << std::endl;
-
-    std::cout << "Frames: " << _frame_count << " Profiles: " << _profile_count
-              << " Invalid: " << _invalid_count << std::endl;
-
   } catch (ApiError &e) {
     std::cout << "ERROR: " << e.what() << std::endl;
     r = 1;
@@ -678,9 +656,13 @@ int main(int argc, char* argv[])
       jsGetError(err, &err_str);
       std::cout << "jsError (" << err << "): " << err_str << std::endl;
     }
+  } catch (std::runtime_error &e) {
+    std::cout << "ERROR: " << e.what() << std::endl;
+    r = 1;
   }
 
-  // Cleanup
+  std::cout << "Exiting..." << std::endl;
+
   ImGui_ImplOpenGL2_Shutdown();
   ImGui_ImplGlfw_Shutdown();
   ImPlot::DestroyContext();
@@ -688,6 +670,28 @@ int main(int argc, char* argv[])
 
   glfwDestroyWindow(window);
   glfwTerminate();
+
+  jsScanSystemStopScanning(scan_system);
+  jsScanSystemDisconnect(scan_system);
+  jsScanSystemFree(scan_system);
+
+  if (nullptr != colors) {
+    for (int i = 0; i < serial_numbers.size(); i++) {
+      for (int j = 0; j < kMaxElementCount; j++) {
+        delete[] colors[i][j];
+      }
+      delete[] colors[i];
+    }
+    delete[] colors;
+  }
+
+  if (nullptr != profiles) {
+    delete profiles;
+  }
+
+  if (nullptr != is_element_enabled) {
+    delete is_element_enabled;
+  }
 
   return 0;
 }
